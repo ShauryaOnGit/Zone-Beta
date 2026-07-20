@@ -2,59 +2,71 @@ import { useState } from 'react';
 import { supabase } from './lib/supabaseClient';
 
 export default function AuthPage({ onSignedIn }) {
-  const [view, setView] = useState('signup'); // 'signup' | 'signin'
+  const [view, setView] = useState('signup');
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const resetMessages = () => setError('');
+  const resetMessages = () => {
+    setError('');
+    setMessage('');
+  };
 
   const handleSignUp = async () => {
     resetMessages();
-    if (!username.trim()) { setError('Pick a username.'); return; }
-    setLoading(true);
-
-    const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
-    if (signUpError) {
-      setLoading(false);
-      setError(signUpError.message);
+    if (!username.trim()) {
+      setError('Pick a username.');
       return;
     }
 
-    // Email confirmation may be required before a session exists yet -- in
-    // that case we still try to save the username now via an RPC-free path:
-    // if there's no session, Supabase's anon key can't write to profiles
-    // (RLS requires auth.uid()), so we save it right after they confirm and
-    // sign in instead. If a session DOES exist immediately, save it now.
-    if (data.session) {
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({ user_id: data.user.id, username: username.trim() });
-      if (profileError) {
-        setLoading(false);
-        setError(`Account created, but couldn't save your username: ${profileError.message}`);
-        return;
-      }
-    }
+    setLoading(true);
+
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { username: username.trim() },
+      },
+    });
 
     setLoading(false);
-    if (data.session) {
-      onSignedIn(data.session);
-    } else {
-      setError('');
-      setView('signin');
+
+    if (signUpError) {
+      setError(signUpError.message || 'Something went wrong creating your account.');
+      return;
     }
+
+    if (data?.session) {
+      onSignedIn(data.session);
+      return;
+    }
+
+    setMessage('A confirmation link has been sent to your email. After verifying, sign in to continue.');
+    setView('signin');
   };
 
   const handleSignIn = async () => {
     resetMessages();
     setLoading(true);
-    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
     setLoading(false);
-    if (signInError) { setError(signInError.message); return; }
-    onSignedIn(data.session);
+
+    if (signInError) {
+      setError(signInError.message || 'Something went wrong signing you in.');
+      return;
+    }
+
+    if (data?.session) {
+      onSignedIn(data.session);
+    }
   };
 
   const handleSubmit = () => (view === 'signup' ? handleSignUp() : handleSignIn());
@@ -62,8 +74,6 @@ export default function AuthPage({ onSignedIn }) {
   return (
     <div className="flex items-center justify-center min-h-screen bg-slate-50 px-4">
       <div className="w-full max-w-sm">
-        {/* Wordmark: a simple, consistent brand anchor rather than a one-off illustration */}
-
         <div className="text-center mb-6">
           <h1 className="text-xl font-semibold text-slate-900">
             {view === 'signup' ? 'Create your account' : 'Welcome back'}
@@ -77,6 +87,11 @@ export default function AuthPage({ onSignedIn }) {
           {error && (
             <div className="mb-4 text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
               {error}
+            </div>
+          )}
+          {message && (
+            <div className="mb-4 text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+              {message}
             </div>
           )}
 
@@ -119,8 +134,8 @@ export default function AuthPage({ onSignedIn }) {
 
             <button
               onClick={handleSubmit}
-              disabled={loading || !email || !password}
-              className="w-full mt-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg py-2.5 shadow-sm transition-colors"
+              disabled={loading || !email || !password || (view === 'signup' && !username.trim())}
+              className="w-full mt-1 bg-blue-600 hover:cursor-pointer hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg py-2.5 shadow-sm transition-colors"
             >
               {loading ? 'Please wait...' : view === 'signup' ? 'Create account' : 'Sign in'}
             </button>
@@ -129,21 +144,29 @@ export default function AuthPage({ onSignedIn }) {
 
         <p className="text-center text-sm text-slate-500 mt-5">
           {view === 'signup' ? (
-            <>Already have an account?{' '}
+            <>
+              Already have an account?{' '}
               <button
                 type="button"
-                onClick={() => { setView('signin'); resetMessages(); }}
-                className="font-semibold text-blue-600 hover:text-blue-700"
+                onClick={() => {
+                  setView('signin');
+                  resetMessages();
+                }}
+                className="font-semibold text-blue-600 hover:text-blue-700 hover:cursor-pointer"
               >
                 Sign in
               </button>
             </>
           ) : (
-            <>Don't have an account?{' '}
+            <>
+              Don't have an account?{' '}
               <button
                 type="button"
-                onClick={() => { setView('signup'); resetMessages(); }}
-                className="font-semibold text-blue-600 hover:text-blue-700"
+                onClick={() => {
+                  setView('signup');
+                  resetMessages();
+                }}
+                className="font-semibold text-blue-600 hover:cursor-pointer hover:text-blue-700"
               >
                 Sign up
               </button>
