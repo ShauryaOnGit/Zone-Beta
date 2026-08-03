@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import ZoneLogo from './ZoneLogo';
 
 export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, onSignOut, user }) {
   const displayName = user?.user_metadata?.username || user?.username || 'Guest';
@@ -7,20 +8,23 @@ export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, on
     <aside className="w-72 h-screen bg-white border-r border-slate-100 p-6 flex flex-col justify-between">
       <div className="space-y-8">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Zone</h1>
-          <p className="text-sm text-slate-500 mt-1">Signed in as <span className="font-semibold text-slate-700">{displayName}</span></p>
+          <ZoneLogo animated={false} theme="light" size={20} />
+          <p className="text-sm text-slate-500 mt-3">Signed in as <span className="font-semibold text-slate-700">{displayName}</span></p>
         </div>
 
         <nav className="space-y-1">
-          <NavLink to="/" className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-lg font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
-            Home
+          <NavLink to="/" end className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+            Feed
           </NavLink>
-          <NavLink to="/profile" className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-lg font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+          <NavLink to="/friends" className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+            Friends
+          </NavLink>
+          <NavLink to="/profile" end className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
             Profile
           </NavLink>
         </nav>
 
-        <button onClick={focusModeActive ? onStopFocus : onStartFocus} className={`w-full text-white text-sm font-semibold py-3 px-4 rounded-xl ${focusModeActive ? "bg-rose-600" : "bg-slate-900"}`}>
+        <button onClick={focusModeActive ? onStopFocus : onStartFocus} className={`w-full text-white text-sm font-semibold py-3 px-4 rounded-md ${focusModeActive ? "bg-rose-600" : "bg-slate-900"}`}>
           {focusModeActive ? 'End Focus Session' : 'Start Focus Session'}
         </button>
       </div>
@@ -28,7 +32,7 @@ export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, on
       <div className="space-y-3">
         <button
           onClick={onSignOut}
-          className="w-full text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl py-3 transition-colors"
+          className="w-full text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md py-3 transition-colors"
         >
           Sign out
         </button>

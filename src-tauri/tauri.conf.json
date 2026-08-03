@@ -14,7 +14,9 @@
       {
         "title": "zone-beta-react",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "minWidth": 1024,
+        "minHeight": 700
       }
     ],
     "security": {

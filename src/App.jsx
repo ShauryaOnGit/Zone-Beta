@@ -3,8 +3,11 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Feed from './components/Feed';
 import Profile from './components/Profile';
+import UserProfile from './components/UserProfile';
+import Friends from './components/Friends';
 import UpcomingEvents from './components/UpcomingEvents';
 import AuthPage from './AuthPage';
+import FocusSession from './components/FocusSession';
 import { supabase } from './lib/supabaseClient';
 
 function Layout({ session, onSignOut }) {
@@ -19,6 +22,11 @@ function Layout({ session, onSignOut }) {
   const handleStopFocus = () => {
     setFocusModeActive(false);
   };
+
+  // When focus mode is active, replace the whole layout with the focus screen
+  if (focusModeActive) {
+    return <FocusSession onStopFocus={handleStopFocus} />;
+  }
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans">
@@ -35,6 +43,8 @@ function Layout({ session, onSignOut }) {
             <Routes>
               <Route path="/" element={<Feed />} />
               <Route path="/profile" element={<Profile />} />
+              <Route path="/profile/:userId" element={<UserProfile />} />
+              <Route path="/friends" element={<Friends />} />
             </Routes>
           </div>
           {showSidebar && <UpcomingEvents />}
