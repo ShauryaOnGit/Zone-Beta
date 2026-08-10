@@ -82,12 +82,34 @@ export default function UserProfile() {
       resolvedAvatarUrl = data?.avatar_url;
       setLoading(false);
 
-      // Fetch this user's feed posts
+      // Fetch this user's PUBLIC feed posts for display.
       const { data: postsData, error: postsError } = await supabase
         .from('feed_posts')
         .select('*')
         .eq('user_id', userId)
+        .eq('is_private', false)
         .order('created_at', { ascending: false });
+
+      // Fetch ALL of this user's posts separately so private sessions still
+      // contribute to their overall average focus score.
+      const { data: scorePostsData, error: scorePostsError } = await supabase
+        .from('feed_posts')
+        .select('focus_score')
+        .eq('user_id', userId);
+
+      if (scorePostsError) {
+        console.error('Error fetching focus scores:', scorePostsError);
+      } else {
+        const validScores = (scorePostsData || [])
+          .map((p) => parseFloat(p.focus_score))
+          .filter((n) => !isNaN(n));
+
+        setAverageFocusScore(
+          validScores.length > 0
+            ? Math.round(validScores.reduce((sum, n) => sum + n, 0) / validScores.length)
+            : null
+        );
+      }
 
       if (postsError) {
         console.error('Error fetching user posts:', postsError);
@@ -96,15 +118,6 @@ export default function UserProfile() {
         const postIds = posts.map((p) => p.id);
 
         setLastFocusedAt(posts.length > 0 ? posts[0].created_at : null);
-
-        const validScores = posts
-          .map((p) => parseFloat(p.focus_score))
-          .filter((n) => !isNaN(n));
-        setAverageFocusScore(
-          validScores.length > 0
-            ? Math.round(validScores.reduce((sum, n) => sum + n, 0) / validScores.length)
-            : null
-        );
 
         // Fetch reactions for this user's posts
         let reactionsMap = {};

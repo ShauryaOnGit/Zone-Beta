@@ -252,6 +252,7 @@ export default function Feed() {
       let postsQuery = supabase
         .from('feed_posts')
         .select('*')
+        .eq('is_private', false)
         .order('created_at', { ascending: false });
 
       postsQuery = userId ? postsQuery.in('user_id', visibleUserIds) : postsQuery.eq('user_id', '__none__');

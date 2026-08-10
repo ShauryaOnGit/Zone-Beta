@@ -1,4 +1,3 @@
-// components/FocusSession.jsx
 import { useState, useRef, useEffect } from 'react';
 import { Command } from '@tauri-apps/plugin-shell';
 import { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
@@ -12,6 +11,7 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
   const [selectedTheme, setSelectedTheme] = useState(feedCardThemes[0].id);
   const [imageFile, setImageFile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingType, setSubmittingType] = useState(null); // 'public' | 'private' | null
   const [error, setError] = useState('');
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
@@ -23,14 +23,15 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handlePublish = async () => {
+  const handleSaveSession = async (isPrivate = false) => {
     setIsSubmitting(true);
+    setSubmittingType(isPrivate ? 'private' : 'public');
     setError('');
     let imageUrl = null;
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("You must be logged in to post.");
+      if (!session) throw new Error("You must be logged in to save your session.");
 
       if (imageFile) {
         const fileExt = imageFile.name.split('.').pop();
@@ -55,6 +56,7 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
         theme_id: selectedTheme,
         bg_image: imageUrl,
         logs: logs.join('\n'),
+        is_private: isPrivate,
       });
 
       if (insertError) throw insertError;
@@ -64,6 +66,7 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
       setError(err.message);
     } finally {
       setIsSubmitting(false);
+      setSubmittingType(null);
     }
   };
 
@@ -117,7 +120,7 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
 
         {error && <p className="text-[#E11D48] mb-4">{error}</p>}
 
-        <div className="flex justify-end gap-4 items-center">
+        <div className="flex justify-end gap-3 items-center flex-wrap">
           {confirmingDiscard ? (
             <div className="bg-slate-900/95 border border-white/20 p-2.5 rounded-md shadow-sm flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
               <span className="text-xs text-white font-medium pl-1">Discard session?</span>
@@ -137,17 +140,33 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
           ) : (
             <button 
               onClick={() => setConfirmingDiscard(true)}
-              className="px-6 py-3 rounded-md font-semibold text-white bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.15)] transition-colors cursor-pointer"
+              className="px-5 py-3 rounded-md font-semibold text-white bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.15)] transition-colors cursor-pointer"
             >
               Discard
             </button>
           )}
+
+          {/* Save Privately Button */}
           <button 
-            onClick={handlePublish}
+            onClick={() => handleSaveSession(true)}
+            disabled={isSubmitting}
+            className="px-5 py-3 rounded-md font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 hover:text-white border border-slate-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2"
+            title="Save session to your profile without posting to the public feed"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            {isSubmitting && submittingType === 'private' ? 'Saving...' : 'Save Privately'}
+          </button>
+
+          {/* Publish Publicly Button */}
+          <button 
+            onClick={() => handleSaveSession(false)}
             disabled={isSubmitting}
             className="px-6 py-3 rounded-md font-semibold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-colors shadow-lg shadow-indigo-900/20 cursor-pointer"
           >
-            {isSubmitting ? 'Publishing...' : 'Publish to Feed'}
+            {isSubmitting && submittingType === 'public' ? 'Publishing...' : 'Publish to Feed'}
           </button>
         </div>
       </div>
@@ -183,8 +202,6 @@ export default function FocusSession({ onStopFocus }) {
     };
   }, []);
 
-  // Fetch the user's saved "upcoming events" so they can be offered as
-  // quick-select prompts instead of retyping the same goal every time.
   useEffect(() => {
     const loadSavedEvents = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -262,11 +279,6 @@ export default function FocusSession({ onStopFocus }) {
 
   const handleStop = async () => {
     try {
-      // Ask the sidecar to stop cooperatively so it can finish its current
-      // loop iteration and print FINAL_SCORE before exiting. A hard
-      // child.kill() (especially on Windows) terminates the process
-      // immediately and skips Python's atexit hook entirely, so FINAL_SCORE
-      // would never be printed at all.
       const finalScorePromise = new Promise((resolve) => {
         finalScoreResolverRef.current = resolve;
       });
@@ -276,8 +288,6 @@ export default function FocusSession({ onStopFocus }) {
       const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 15000));
       const result = await Promise.race([finalScorePromise, timeoutPromise]);
 
-      // If the sidecar didn't wind down on its own in time, force it closed
-      // as a fallback so we don't leave a zombie process running.
       if (result === null) {
         console.warn('Sidecar did not report FINAL_SCORE in time — forcing kill.');
         await childRef.current?.kill().catch(() => {});
