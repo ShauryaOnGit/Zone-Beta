@@ -16,7 +16,7 @@ function ProfileActionCard({ profile, navigate, children }) {
           className="w-14 h-14 rounded-full object-cover border border-slate-200 bg-white group-hover/user:opacity-80 transition-opacity flex-shrink-0"
         />
         <div className="min-w-0">
-          <p className="text-xs uppercase tracking-[0.15em] text-slate-500">Username</p>
+          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Username</p>
           <p className="mt-1 text-base font-semibold text-slate-900 group-hover/user:underline truncate">
             {profile.username || '—'}
           </p>
