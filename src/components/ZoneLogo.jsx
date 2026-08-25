@@ -6,14 +6,9 @@
 export function ZoneEye({ animated = false, theme = 'dark', size = 48 }) {
   const isLight = theme === 'light';
 
-  const fieldBlur = size * 0.16;
-  const rimGlow = size * 0.14;
+  const fieldBlur = size * 0.14;
   const pupilGlow = size * 0.1;
-  const outlineWidth = Math.max(1, size * 0.008);
 
-  const outlineColor = isLight ? 'rgba(15,23,42,0.12)' : 'rgba(255,255,255,0.08)';
-  const rimInsetColor = isLight ? 'rgba(15,23,42,0.18)' : 'rgba(0,0,0,0.5)';
-  const rimOuterColor = isLight ? 'rgba(15,23,42,0.14)' : 'rgba(0,0,0,0.55)';
   const pupilColor = isLight ? '#1e293b' : '#000';
   const pupilGlowColor = isLight ? 'rgba(15,23,42,0.35)' : 'rgba(0,0,0,0.9)';
 
@@ -26,7 +21,6 @@ export function ZoneEye({ animated = false, theme = 'dark', size = 48 }) {
         height: `${size}px`,
         borderRadius: '50%',
         overflow: 'hidden',
-        outline: `${outlineWidth}px solid ${outlineColor}`,
         boxShadow: isLight ? '0 1px 3px rgba(15,23,42,0.08)' : 'none',
         flexShrink: 0,
       }}
@@ -44,21 +38,12 @@ export function ZoneEye({ animated = false, theme = 'dark', size = 48 }) {
             radial-gradient(circle at 55% 92%, #3ea89d 0%, #3ea89d 16%, transparent 40%),
             radial-gradient(circle at 18% 80%, #5fae4c 0%, #5fae4c 17%, transparent 42%),
             radial-gradient(circle at 6% 48%,  #e6a532 0%, #e6a532 15%, transparent 38%),
-            radial-gradient(circle at 42% 46%, #8a4fd1 0%, #8a4fd1 20%, transparent 46%)
+            radial-gradient(circle at 42% 46%, #8a4fd1 0%, #8a4fd1 20%, transparent 46%),
+            conic-gradient(from 0deg, #f4744a, #e15f92, #8f5fdb, #5a9edd, #3ea89d, #5fae4c, #e6a532, #f4744a)
           `,
           filter: `blur(${fieldBlur}px) saturate(${isLight ? 1.15 : 1.3}) contrast(1.08)`,
           opacity: isLight ? 0.9 : 1,
           animation: 'zoneLogoDrift 31s ease-in-out infinite alternate',
-        }}
-      />
-      <div
-        className="zone-logo-rim"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          borderRadius: '50%',
-          boxShadow: `0 0 0 ${outlineWidth * 1.5}px ${rimInsetColor} inset, 0 0 ${rimGlow}px ${rimOuterColor}`,
-          pointerEvents: 'none',
         }}
       />
       <div

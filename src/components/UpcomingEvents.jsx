@@ -65,6 +65,21 @@ export default function UpcomingEvents() {
     }
   };
 
+  const handlePinnedTaskClick = (title) => {
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) return;
+
+    try {
+      sessionStorage.setItem('zone:pending-focus-goal', trimmedTitle);
+    } catch (err) {
+      console.warn('Could not store pinned task for FocusSession:', err);
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('zone:start-focus-request', { detail: { title: trimmedTitle } })
+    );
+  };
+
   const handleDelete = async (id) => {
     try {
       const { error: deleteError } = await supabase
@@ -84,15 +99,15 @@ export default function UpcomingEvents() {
   };
 
   return (
-    <div className="hidden xl:block w-72 space-y-4 flex-shrink-0">
-      <div className="flex justify-between items-center">
-        <h3 className="font-bold text-lg">Quick Add Events</h3>
+    <div className="w-72 space-y-4">
+      <div className="h-[38px] flex justify-between items-center">
+        <h3 className="text-xl font-semibold">Pinned Tasks</h3>
         <button
           onClick={() => {
             setIsAdding((prev) => !prev);
             setError('');
           }}
-          className="w-7 h-7 flex items-center justify-center rounded-full bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer"
+          className="w-7 h-7 flex items-center justify-center rounded-full bg-white hover:bg-white text-black border border-[#D0D7DE] transition-colors cursor-pointer"
           title="Add a quick note"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -142,12 +157,25 @@ export default function UpcomingEvents() {
 
       {!isLoading && events.length === 0 && !isAdding && (
         <p className="text-xs text-slate-500">
-          No notes yet. Tap + to jot down something you need to do.
+          Save tasks you do often and start them with one click.
         </p>
       )}
 
       {events.map((ev) => (
-        <div key={ev.id} className="group bg-white p-4 rounded-md border border-[#D0D7DE] space-y-1 relative">
+        <div
+          key={ev.id}
+          onClick={() => handlePinnedTaskClick(ev.title)}
+          className="group bg-white p-4 rounded-md border border-[#D0D7DE] space-y-1 relative cursor-pointer hover:border-slate-400 hover:shadow-sm transition-all"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handlePinnedTaskClick(ev.title);
+            }
+          }}
+          title={`Start a focus session with "${ev.title}"`}
+        >
           <p className="font-bold text-sm pr-5">{ev.title}</p>
           <p className="text-xs text-slate-500">
             {new Date(ev.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -155,14 +183,21 @@ export default function UpcomingEvents() {
 
           {confirmingDeleteId === ev.id ? (
             <div className="absolute top-2 right-2 flex items-center gap-1 bg-slate-900/95 rounded-md px-1.5 py-1 shadow-md">
+              <p>Delete Task?</p>
               <button
-                onClick={() => handleDelete(ev.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(ev.id);
+                }}
                 className="text-[10px] text-white bg-rose-600 hover:bg-rose-500 rounded px-1.5 py-0.5 cursor-pointer"
               >
                 Yes
               </button>
               <button
-                onClick={() => setConfirmingDeleteId(null)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmingDeleteId(null);
+                }}
                 className="text-[10px] text-white bg-slate-700 hover:bg-slate-600 rounded px-1.5 py-0.5 cursor-pointer"
               >
                 No
@@ -170,7 +205,10 @@ export default function UpcomingEvents() {
             </div>
           ) : (
             <button
-              onClick={() => setConfirmingDeleteId(ev.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirmingDeleteId(ev.id);
+              }}
               className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-rose-600 cursor-pointer"
               title="Remove"
             >

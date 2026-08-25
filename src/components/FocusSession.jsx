@@ -4,10 +4,15 @@ import { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } from '
 import ZoneLogo, { ZoneEye } from './ZoneLogo';
 import { supabase } from '../lib/supabaseClient';
 import { feedCardThemes } from '../feedCardThemes';
+import LowDopamineBreak from './LowDopamineBreak';
+import { computeOptimalSession } from '../lib/focusAnalytics';
 
-const MINI_SIZE = { width: 280, height: 110 }; 
+const MINI_SIZE = { width: 280, height: 130 };
 
-function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
+const OPTIMAL_BREAKS_STORAGE_PREFIX = 'zone:optimal-breaks:';
+
+
+function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, scoreTimeline, onClose }) {
   const [selectedTheme, setSelectedTheme] = useState(feedCardThemes[0].id);
   const [imageFile, setImageFile] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -51,11 +56,14 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
       const { error: insertError } = await supabase.from('feed_posts').insert({
         user_id: session.user.id,
         title: goal,
+        task_name: goal, // Added for Pro Analytics compatibility
         time_elapsed: formatTime(elapsedTime),
         focus_score: focusScore,
+        score_timeline: scoreTimeline, // Injects the telemetry data here
         theme_id: selectedTheme,
         bg_image: imageUrl,
         logs: logs.join('\n'),
+        distracted_logs: distractionLogs,
         is_private: isPrivate,
       });
 
@@ -175,7 +183,18 @@ function FocusOverview({ goal, elapsedTime, logs, focusScore, onClose }) {
 }
 
 export default function FocusSession({ onStopFocus }) {
-  const [goal, setGoal] = useState('');
+  const [goal, setGoal] = useState(() => {
+    try {
+      const pendingGoal = sessionStorage.getItem('zone:pending-focus-goal') || '';
+      if (pendingGoal) {
+        sessionStorage.removeItem('zone:pending-focus-goal');
+      }
+      return pendingGoal;
+    } catch (err) {
+      console.warn('Could not load pinned task into FocusSession:', err);
+      return '';
+    }
+  });
   const [savedEvents, setSavedEvents] = useState([]);
   const [intendedTime, setIntendedTime] = useState('25');
   const [showTooltip, setShowTooltip] = useState(false);
@@ -187,18 +206,73 @@ export default function FocusSession({ onStopFocus }) {
 
   const [isCompleted, setIsCompleted] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [distractionLogs, setDistractionLogs] = useState([]);
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [focusScore, setFocusScore] = useState(0);
   
+  // Array to capture time-series telemetry data for the Pro Dashboard
+  const [scoreTimeline, setScoreTimeline] = useState([]);
+
+  // Pro-only: a personalized session-length recommendation derived from
+  // past sessions (see computeOptimalSession in lib/focusAnalytics), used
+  // to default the "Intended time" picker and to power the in-session
+  // nudge below. Never forces anything — see nudge state further down.
+  const [optimalSession, setOptimalSession] = useState({ hasEnoughData: false });
+  const hasManuallySetTime = useRef(false); // don't clobber a user's own choice
+
+  // Optional algorithm-timed breaks. Analytics stores the user's preference;
+  // when a focus session begins we snapshot both the preference and the current
+  // recommendation so the threshold cannot move mid-session.
+  const [optimalBreaksEnabled, setOptimalBreaksEnabled] = useState(false);
+  const [showBreak, setShowBreak] = useState(false);
+  const [breakIntervalSeconds, setBreakIntervalSeconds] = useState(null);
+  const [focusBlockElapsed, setFocusBlockElapsed] = useState(0);
+
+  const breakIntervalSecondsRef = useRef(null);
+  const focusBlockStartRef = useRef(null);
+  const isBreakActiveRef = useRef(false);
+
   const childRef = useRef(null);
   const savedWindowState = useRef(null);
   const timerRef = useRef(null);
   const finalScoreResolverRef = useRef(null);
+  // Real wall-clock start time (ms). setInterval only counts ticks, and
+  // ticks get throttled or fully paused by full-screen video, a
+  // backgrounded window, and especially system sleep — the sidecar keeps
+  // tracking on a real OS clock the whole time, so the displayed timer
+  // needs to be derived from a real timestamp too, not from counting
+  // ticks, or it silently falls behind.
+  const sessionStartRef = useRef(null);
 
   useEffect(() => {
     return () => {
       childRef.current?.kill().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  // The interval itself is what makes the timer self-correct on every
+  // tick, but ticks don't fire at all while the machine is asleep — so
+  // the number on screen can sit stale until the next natural 1s tick
+  // lands after waking. Recomputing immediately on visibility/focus
+  // return closes that last gap.
+  useEffect(() => {
+    const resync = () => {
+      if (sessionStartRef.current == null) return;
+
+      const now = Date.now();
+      setElapsedTime(Math.floor((now - sessionStartRef.current) / 1000));
+
+      if (!isBreakActiveRef.current && focusBlockStartRef.current != null) {
+        setFocusBlockElapsed(Math.floor((now - focusBlockStartRef.current) / 1000));
+      }
+    };
+
+    document.addEventListener('visibilitychange', resync);
+    window.addEventListener('focus', resync);
+    return () => {
+      document.removeEventListener('visibilitychange', resync);
+      window.removeEventListener('focus', resync);
     };
   }, []);
 
@@ -223,6 +297,42 @@ export default function FocusSession({ onStopFocus }) {
     loadSavedEvents();
   }, []);
 
+  useEffect(() => {
+    const loadRecommendation = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_pro, optimal_breaks_enabled')
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (!profile?.is_pro) return;
+
+      setOptimalBreaksEnabled(Boolean(profile.optimal_breaks_enabled));
+
+      const { data: posts, error: postsError } = await supabase
+        .from('feed_posts')
+        .select('score_timeline, created_at')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+        .limit(30);
+
+      if (postsError || !posts) return;
+
+      const recommendation = computeOptimalSession(posts);
+      setOptimalSession(recommendation);
+
+      // Only prefill — never override a length the user already picked.
+      if (recommendation.hasEnoughData && !hasManuallySetTime.current) {
+        setIntendedTime(String(recommendation.recommendedMinutes));
+      }
+    };
+
+    loadRecommendation();
+  }, []);
+
   const formatTime = (totalSeconds) => {
     const h = Math.floor(totalSeconds / 3600);
     const m = Math.floor((totalSeconds % 3600) / 60);
@@ -244,6 +354,33 @@ export default function FocusSession({ onStopFocus }) {
       
       command.stdout.on('data', (line) => {
         setLogs((prev) => [...prev, line]);
+
+        if (line.includes('DISTRACTION_LOG:')) {
+          try {
+            const jsonString = line.split('DISTRACTION_LOG:')[1].trim();
+            const distraction = JSON.parse(jsonString);
+            setDistractionLogs((prev) => [...prev, distraction]);
+          } catch (err) {
+            console.error('Failed to parse distraction log:', err);
+          }
+        }
+
+        // Catch the new telemetry output and save it to our state array
+        if (line.includes('TELEMETRY:')) {
+          try {
+            const jsonString = line.split('TELEMETRY:')[1].trim();
+            const point = JSON.parse(jsonString);
+            
+            setScoreTimeline((prev) => [...prev, point]);
+            
+            // Keep the live score updated
+            if (point.score !== undefined) {
+              setFocusScore(point.score);
+            }
+          } catch (err) {
+            console.error("Failed to parse telemetry:", err);
+          }
+        }
 
         if (line.includes('CURRENT_SCORE:')) {
           const score = parseInt(line.split(':')[1].trim(), 10);
@@ -267,13 +404,75 @@ export default function FocusSession({ onStopFocus }) {
 
       setSubmitted(true);
       setElapsedTime(0);
+
+      const now = Date.now();
+      sessionStartRef.current = now;
+      focusBlockStartRef.current = now;
+      isBreakActiveRef.current = false;
+      setFocusBlockElapsed(0);
+
+      const snappedBreakInterval =
+        optimalBreaksEnabled && optimalSession.hasEnoughData
+          ? optimalSession.recommendedMinutes * 60
+          : null;
+
+      breakIntervalSecondsRef.current = snappedBreakInterval;
+      setBreakIntervalSeconds(snappedBreakInterval);
+
       timerRef.current = setInterval(() => {
-        setElapsedTime((prev) => prev + 1);
+        // Total session time remains one continuous wall-clock session.
+        const current = Date.now();
+        setElapsedTime(Math.floor((current - sessionStartRef.current) / 1000));
+
+        // Break eligibility uses only the current focus block. During a break
+        // this clock freezes; after RESUME it starts again from zero.
+        if (!isBreakActiveRef.current && focusBlockStartRef.current != null) {
+          setFocusBlockElapsed(
+            Math.floor((current - focusBlockStartRef.current) / 1000)
+          );
+        }
       }, 1000);
 
     } catch (err) {
       console.error('Failed to start focus tracker:', err);
       setError('Could not start the focus tracker. Check the logs.');
+    }
+  };
+
+  const handleStartOptimalBreak = async () => {
+    const interval = breakIntervalSecondsRef.current;
+    if (!childRef.current || !interval || focusBlockElapsed < interval || isBreakActiveRef.current) {
+      return;
+    }
+
+    try {
+      // Keep the same process alive so the sidecar retains its score counters,
+      // caches, and prior session context. It simply stops capturing frames.
+      await childRef.current.write('PAUSE\n');
+      isBreakActiveRef.current = true;
+
+      if (isMini) {
+        await exitMiniMode();
+      }
+
+      setShowBreak(true);
+    } catch (err) {
+      console.error('Failed to pause focus tracker for break:', err);
+      setError('Could not pause tracking for the break.');
+    }
+  };
+
+  const handleFinishOptimalBreak = async () => {
+    try {
+      await childRef.current?.write('RESUME\n');
+    } catch (err) {
+      console.error('Failed to resume focus tracker after break:', err);
+      setError('Could not resume tracking after the break.');
+    } finally {
+      isBreakActiveRef.current = false;
+      focusBlockStartRef.current = Date.now();
+      setFocusBlockElapsed(0);
+      setShowBreak(false);
     }
   };
 
@@ -297,6 +496,7 @@ export default function FocusSession({ onStopFocus }) {
     } finally {
       finalScoreResolverRef.current = null;
       childRef.current = null;
+      isBreakActiveRef.current = false;
       if (timerRef.current) clearInterval(timerRef.current);
       if (isMini) await exitMiniMode();
       setIsCompleted(true);
@@ -368,7 +568,9 @@ export default function FocusSession({ onStopFocus }) {
         goal={goal}
         elapsedTime={elapsedTime}
         logs={logs}
+        distractionLogs={distractionLogs}
         focusScore={focusScore}
+        scoreTimeline={scoreTimeline} // Passing the telemetry data down to the save function
         onClose={onStopFocus}
       />
     );
@@ -378,6 +580,12 @@ export default function FocusSession({ onStopFocus }) {
   const totalSecondsIntended = hasIntendedTime ? parseInt(intendedTime, 10) * 60 : 0;
   const progressPercent = hasIntendedTime && totalSecondsIntended > 0 
     ? Math.min(100, (elapsedTime / totalSecondsIntended) * 100) 
+    : 0;
+
+  const breakAvailable =
+    Boolean(breakIntervalSeconds) && focusBlockElapsed >= breakIntervalSeconds;
+  const secondsUntilBreak = breakIntervalSeconds
+    ? Math.max(0, breakIntervalSeconds - focusBlockElapsed)
     : 0;
 
   return (
@@ -453,17 +661,22 @@ export default function FocusSession({ onStopFocus }) {
               />
 
               {savedEvents.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-[20px] -mt-2 w-full">
-                  {savedEvents.map((ev) => (
-                    <button
-                      key={ev.id}
-                      type="button"
-                      onClick={() => setGoal(ev.title)}
-                      className="text-xs px-3 py-1.5 rounded-md bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] border border-[rgba(255,255,255,0.1)] text-[rgba(255,255,255,0.75)] hover:text-white transition-colors cursor-pointer"
-                    >
-                      {ev.title}
-                    </button>
-                  ))}
+                <div className="mb-[20px] -mt-2 w-full">
+                  <p className="mb-2 text-[11px] font-medium text-[rgba(255,255,255,0.42)]">
+                    From your Pinned Tasks — tasks you saved for quick access.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {savedEvents.map((ev) => (
+                      <button
+                        key={ev.id}
+                        type="button"
+                        onClick={() => setGoal(ev.title)}
+                        className="text-xs px-3 py-1.5 rounded-md bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.12)] border border-[rgba(255,255,255,0.1)] text-[rgba(255,255,255,0.75)] hover:text-white transition-colors cursor-pointer"
+                      >
+                        {ev.title}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -473,6 +686,7 @@ export default function FocusSession({ onStopFocus }) {
                 <select
                   value={intendedTime === 'custom' || !['25','45','60','90','none'].includes(intendedTime) ? 'custom' : intendedTime}
                   onChange={(e) => {
+                    hasManuallySetTime.current = true;
                     if (e.target.value === 'custom') {
                       setIntendedTime('30');
                     } else {
@@ -497,6 +711,7 @@ export default function FocusSession({ onStopFocus }) {
                       max="999"
                       value={intendedTime === 'custom' ? '30' : intendedTime}
                       onChange={(e) => {
+                        hasManuallySetTime.current = true;
                         const val = e.target.value;
                         if (val === '' || parseInt(val) > 0) {
                           setIntendedTime(val || '1');
@@ -521,6 +736,11 @@ export default function FocusSession({ onStopFocus }) {
                   )}
                 </div>
               </div>
+              {optimalSession.hasEnoughData && !hasManuallySetTime.current && (
+                <p className="text-xs text-[rgba(255,255,255,0.4)] -mt-4 mb-6">
+                  Set to your recommended {optimalSession.recommendedMinutes} min, based on your past sessions.
+                </p>
+              )}
               {error && <p className="text-[#E11D48] text-sm mb-4">{error}</p>}
               <button
                 type="submit"
@@ -560,6 +780,17 @@ export default function FocusSession({ onStopFocus }) {
                 <div className="bg-indigo-400/90 h-full transition-all duration-500 ease-linear rounded-full" style={{ width: `${progressPercent}%` }} />
               </div>
             )}
+
+            {breakIntervalSeconds && (
+              <button
+                type="button"
+                onClick={handleStartOptimalBreak}
+                disabled={!breakAvailable}
+                className="mt-2 w-full h-[25px] rounded-md border border-[rgba(255,255,255,0.10)] bg-[rgba(255,255,255,0.08)] text-[10px] font-semibold text-[rgba(255,255,255,0.80)] hover:bg-[rgba(255,255,255,0.12)] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                {breakAvailable ? 'Take 5 min break' : `Break in ${formatTime(secondsUntilBreak)}`}
+              </button>
+            )}
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center w-full max-w-lg mx-auto my-auto">
@@ -575,7 +806,20 @@ export default function FocusSession({ onStopFocus }) {
             <div className="text-[15px] font-medium text-[rgba(255,255,255,0.65)] max-w-[260px] truncate text-center" title={goal}>
               {goal}
             </div>
-            <div className="h-[48px]" />
+            <div className="h-[28px]" />
+
+            {breakIntervalSeconds && (
+              <button
+                type="button"
+                onClick={handleStartOptimalBreak}
+                disabled={!breakAvailable}
+                className="h-[42px] min-w-[220px] px-[24px] rounded-md border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.08)] text-sm font-semibold text-[rgba(255,255,255,0.85)] hover:bg-[rgba(255,255,255,0.12)] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                {breakAvailable ? 'Take 5 min break' : `Break in ${formatTime(secondsUntilBreak)}`}
+              </button>
+            )}
+
+            <div className={breakIntervalSeconds ? 'h-[12px]' : 'h-[20px]'} />
             <button
               onClick={handleStop}
               className="h-[48px] min-w-[220px] px-[32px] bg-[#E11D48] hover:bg-rose-600 text-white text-[16px] font-semibold rounded-md shadow-lg shadow-rose-900/20 active:scale-95 transition-all cursor-pointer flex items-center justify-center"
@@ -585,6 +829,14 @@ export default function FocusSession({ onStopFocus }) {
           </div>
         )}
       </div>
+
+      {showBreak && (
+        <LowDopamineBreak
+          durationSeconds={5 * 60}
+          onComplete={handleFinishOptimalBreak}
+          onSkip={handleFinishOptimalBreak}
+        />
+      )}
     </div>
   );
 }

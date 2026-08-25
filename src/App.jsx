@@ -7,6 +7,7 @@ import UserProfile from './components/UserProfile';
 import Friends from './components/Friends';
 import UpcomingEvents from './components/UpcomingEvents';
 import AuthPage from './AuthPage';
+import { Analytics } from './components/Analytics';
 import FocusSession from './components/FocusSession';
 import { supabase } from './lib/supabaseClient';
 
@@ -38,16 +39,28 @@ function Layout({ session, onSignOut }) {
         user={session?.user}
       />
       <main className="flex-1 overflow-y-auto p-10">
-        <div className="flex gap-10 max-w-7xl mx-auto">
-          <div className="flex-1">
+        <div
+          className={`grid max-w-7xl mx-auto gap-10 items-start ${
+            showSidebar
+              ? 'grid-cols-1 xl:grid-cols-[minmax(0,1fr)_18rem]'
+              : 'grid-cols-1'
+          }`}
+        >
+          <div className="min-w-0">
             <Routes>
               <Route path="/" element={<Feed />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/profile/:userId" element={<UserProfile />} />
               <Route path="/friends" element={<Friends />} />
+              <Route path="/analytics" element={<Analytics session={session} />} />
             </Routes>
           </div>
-          {showSidebar && <UpcomingEvents />}
+
+          {showSidebar && (
+            <div className="hidden xl:block pt-2">
+              <UpcomingEvents />
+            </div>
+          )}
         </div>
       </main>
     </div>

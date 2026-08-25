@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import FeedCard from '../FeedCard';
 import { feedCardThemes } from '../feedCardThemes';
 import { supabase } from '../lib/supabaseClient';
+import { computeFairScore } from '../lib/focusAnalytics';
 
 function EditPostModal({ post, userId, onClose, onSaved }) {
   const [title, setTitle] = useState(post.title || '');
@@ -39,21 +40,42 @@ function EditPostModal({ post, userId, onClose, onSaved }) {
         bgImageUrl = data.publicUrl;
       }
 
-      const { error: updateError } = await supabase
+      // Persist the edit and require Supabase to return the row that was
+      // actually updated. With RLS, an UPDATE can affect zero rows without
+      // looking like a frontend failure unless we explicitly verify it.
+      const { data: updatedPost, error: updateError } = await supabase
         .from('feed_posts')
         .update({
           title: title.trim(),
           theme_id: selectedTheme,
           bg_image: bgImageUrl,
         })
-        .eq('id', post.rawId);
+        .eq('id', post.rawId)
+        .eq('user_id', userId)
+        .select('id, title, theme_id, bg_image')
+        .maybeSingle();
 
       if (updateError) throw updateError;
 
-      onSaved(post.rawId, { title: title.trim(), themeId: selectedTheme, bgImage: bgImageUrl });
+      if (!updatedPost) {
+        throw new Error(
+          'Supabase did not update this post. Check the feed_posts UPDATE RLS policy for authenticated owners.'
+        );
+      }
+
+      // Update the UI only from the values Supabase confirms were persisted.
+      onSaved(updatedPost.id, {
+        title: updatedPost.title,
+        themeId: updatedPost.theme_id,
+        bgImage: updatedPost.bg_image || undefined,
+      });
     } catch (err) {
-      console.error('Failed to update post:', err);
-      setError('Could not save changes. Please try again.');
+      console.error('Failed to persist post update to Supabase:', err);
+      setError(
+        err?.message?.includes('UPDATE RLS policy')
+          ? 'This edit was not saved. Supabase is blocking post updates for this account.'
+          : 'Could not save changes. Please try again.'
+      );
     } finally {
       setIsSaving(false);
     }
@@ -248,10 +270,15 @@ export default function Feed() {
         }
       }
 
-      // 3. Fetch live posts — only from the current user and their accepted friends
+      // 3. Fetch live posts — only from the current user and their accepted
+      // friends, and only ones that were posted publicly. "Save Privately"
+      // promises a session won't post to the feed, so private posts are
+      // excluded here even when they belong to the viewer themselves —
+      // they still show up on that user's own Profile page.
       let postsQuery = supabase
         .from('feed_posts')
         .select('*')
+        .eq('is_private', false)
         .order('created_at', { ascending: false });
 
       postsQuery = userId ? postsQuery.in('user_id', visibleUserIds) : postsQuery.eq('user_id', '__none__');
@@ -391,7 +418,7 @@ export default function Feed() {
           date: formattedDate,
           title: post.title,
           timeElapsed: post.time_elapsed,
-          focusScore: String(post.focus_score),
+          focusScore: String(computeFairScore(post.score_timeline) ?? post.focus_score),
           themeId: post.theme_id,
           bgImage: post.bg_image || undefined,
           initialReactions: postReactions,
@@ -428,6 +455,12 @@ export default function Feed() {
       prev.map((p) => (p.rawId === rawId ? { ...p, ...updates } : p))
     );
     setEditingPost(null);
+  };
+
+  const handleOpenSummary = (rawId) => {
+    navigate('/analytics', {
+      state: { targetPostId: rawId, openSessionSummary: true },
+    });
   };
 
   const handleUserClick = (clickedUserId) => {
@@ -585,14 +618,27 @@ export default function Feed() {
                   ) : (
                     <>
                       <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenSummary(card.rawId);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-emerald-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
+                        title="Open session summary"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 3v18h18" />
+                          <path d="m7 16 4-4 3 3 5-7" />
+                        </svg>
+                      </button>
+                      <button
                         onClick={() => setEditingPost(card)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-indigo-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
                         title="Edit your feed card"
                       >
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
-                          width="14"
-                          height="14"
+                          width="10"
+                          height="10"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
@@ -611,8 +657,8 @@ export default function Feed() {
                       >
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
-                          width="14"
-                          height="14"
+                          width="10"
+                          height="10"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
+import { computeFairScore } from '../lib/focusAnalytics';
 import FeedCard from '../FeedCard';
 import { feedCardThemes } from '../feedCardThemes';
 
@@ -94,15 +95,15 @@ export default function UserProfile() {
       // contribute to their overall average focus score.
       const { data: scorePostsData, error: scorePostsError } = await supabase
         .from('feed_posts')
-        .select('focus_score')
+        .select('focus_score, score_timeline')
         .eq('user_id', userId);
 
       if (scorePostsError) {
         console.error('Error fetching focus scores:', scorePostsError);
       } else {
         const validScores = (scorePostsData || [])
-          .map((p) => parseFloat(p.focus_score))
-          .filter((n) => !isNaN(n));
+          .map((p) => computeFairScore(p.score_timeline) ?? parseFloat(p.focus_score))
+          .filter((n) => n != null && !isNaN(n));
 
         setAverageFocusScore(
           validScores.length > 0
@@ -168,7 +169,7 @@ export default function UserProfile() {
             date: formattedDate,
             title: post.title,
             timeElapsed: post.time_elapsed,
-            focusScore: String(post.focus_score),
+            focusScore: String(computeFairScore(post.score_timeline) ?? post.focus_score),
             themeId: post.theme_id,
             bgImage: post.bg_image || undefined,
             initialReactions: postReactions,
@@ -227,7 +228,7 @@ export default function UserProfile() {
       </button>
 
       <h1 className="mt-2 text-3xl font-semibold pb-6 text-slate-900">
-        {profile?.username || 'Profile'}
+        Profile
       </h1>
 
       {error && (
@@ -236,55 +237,63 @@ export default function UserProfile() {
         </div>
       )}
 
-      <div className="rounded-sm border border-[#D0D7DE] bg-slate-50 p-6 space-y-5 max-w-md shadow-sm">
-        <div className="flex items-center gap-4">
-          <img
-            src={profile?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`}
-            alt="Profile"
-            className="w-16 h-16 rounded-full object-cover border border-slate-200 bg-white"
-          />
+      <div className="rounded-md border border-[#D0D7DE] bg-white p-7 shadow-sm text-slate-900 overflow-hidden">
+        <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
+          <div className="flex items-center gap-5 min-w-0">
+            <div className="relative shrink-0">
+              <img
+                src={profile?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`}
+                alt="Profile"
+                className="w-20 h-20 rounded-full object-cover border border-[#D0D7DE] bg-white"
+              />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-2xl font-bold text-slate-900 truncate">
+                {profile?.username || '—'}
+              </p>
+            </div>
+          </div>
+
+          <div className="shrink-0 text-center min-w-[150px]">
+            <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+              Avg Focus Score
+            </p>
+            <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
+              {postsLoading
+                ? '—'
+                : averageFocusScore !== null
+                ? averageFocusScore
+                : '—'}
+            </p>
+          </div>
         </div>
 
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Username</p>
-          <p className="mt-1 text-xl font-semibold text-slate-900">{profile?.username || '—'}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Avg Focus Score</p>
-          <p className="mt-1 text-xl font-semibold text-slate-900">
-            {postsLoading
-              ? 'Loading...'
-              : averageFocusScore !== null
-              ? averageFocusScore
-              : '—'}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Last Focused</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">
-            {postsLoading
-              ? 'Loading...'
-              : lastFocusedAt
-              ? formatTimeSince(lastFocusedAt)
-              : "Hasn't started focusing yet"}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Member since</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">
-            {profile?.created_at
-              ? new Date(profile.created_at).toLocaleDateString(undefined, {
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                })
-              : '—'}
-          </p>
-        </div>
+        <div className="mt-8 flex flex-wrap gap-x-8 gap-y-2 text-sm text-slate-500">
+          <span>
+            Last focused{' '}
+            <strong className="font-semibold text-slate-800">
+              {postsLoading
+                ? 'Loading...'
+                : lastFocusedAt
+                ? formatTimeSince(lastFocusedAt)
+                : "Hasn't started focusing yet"}
+            </strong>
+          </span>
 
-        
-
-        
+          <span>
+            Member since{' '}
+            <strong className="font-semibold text-slate-800">
+              {profile?.created_at
+                ? new Date(profile.created_at).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })
+                : '—'}
+            </strong>
+          </span>
+        </div>
       </div>
 
       <div className="mt-10">

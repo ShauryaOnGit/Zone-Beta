@@ -18,9 +18,11 @@
     "@tauri-apps/plugin-shell": "^2.3.5",
     "date-fns": "^4.4.0",
     "emoji-picker-react": "^4.19.1",
+    "html-to-image": "^1.11.13",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.18.1",
+    "recharts": "^3.10.1",
     "tailwindcss": "^4.3.2"
   },
   "devDependencies": {

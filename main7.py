@@ -33,7 +33,9 @@ import io
 import random
 import sys
 import threading
+import json
 import time
+from datetime import datetime
 from collections import OrderedDict
 
 import numpy as np
@@ -169,13 +171,23 @@ def parse_status_and_confidence(answer_text: str):
     return distracted, confidence
 
 
+def parse_reason(answer_text: str) -> str:
+    """Return the VLM's REASON text exactly as emitted after the REASON: label."""
+    for line in answer_text.splitlines():
+        if line.upper().startswith("REASON:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 def confidence_to_max_hits(confidence: int, hits_floor: int = 2, hits_ceiling: int = 5) -> int:
     fraction = confidence / 100.0
     return round(hits_floor + fraction * (hits_ceiling - hits_floor))
 
+import json
 
 def run_screen_capture_loop(task):
     print("Starting live screen tracker...")
+    session_start_time = time.perf_counter()
 
     gate = PixelHashGate(cache_size=50, phash_size=8, phash_threshold=6, default_max_hits=3)
     prompt = (
@@ -189,6 +201,7 @@ def run_screen_capture_loop(task):
     focused_count = 0
     total_count = 0
     stop_requested = threading.Event()
+    pause_requested = threading.Event()
 
     def compute_final_score():
         if total_count:
@@ -196,28 +209,38 @@ def run_screen_capture_loop(task):
         return 0
 
     def print_final_summary():
-        # Guaranteed to run exactly once, whether we stop cooperatively (via
-        # the stdin "STOP" command) or the process exits/crashes on its own.
         print(f"FINAL_SCORE: {compute_final_score()}")
         sys.stdout.flush()
 
-    # atexit still acts as a safety net for crashes/normal exits, but the
-    # primary shutdown path is now the stdin listener below, which lets the
-    # frontend request a clean stop and reliably see FINAL_SCORE before it
-    # kills the process outright.
     atexit.register(print_final_summary)
 
-    def listen_for_stop():
+    def listen_for_commands():
         try:
             for line in sys.stdin:
-                if line.strip().upper() == "STOP":
+                command = line.strip().upper()
+
+                if command == "STOP":
                     stop_requested.set()
                     break
+
+                if command == "PAUSE":
+                    if not pause_requested.is_set():
+                        pause_requested.set()
+                        print("TRACKER_PAUSED")
+                        sys.stdout.flush()
+                    continue
+
+                if command == "RESUME":
+                    if pause_requested.is_set():
+                        pause_requested.clear()
+                        print("TRACKER_RESUMED")
+                        sys.stdout.flush()
+                    continue
         except Exception:
             pass
 
-    stop_listener = threading.Thread(target=listen_for_stop, daemon=True)
-    stop_listener.start()
+    command_listener = threading.Thread(target=listen_for_commands, daemon=True)
+    command_listener.start()
 
     RHO_MAX = 0.20
     T_MIN, T_MAX = 30, 120
@@ -230,11 +253,25 @@ def run_screen_capture_loop(task):
 
     while not stop_requested.is_set():
         try:
+            # PAUSE keeps this same Python process alive — including its score
+            # counters, hash cache, prompt, and all other session state — but
+            # suspends screen capture / VLM work until RESUME arrives.
+            if pause_requested.is_set():
+                while pause_requested.is_set() and not stop_requested.is_set():
+                    time.sleep(0.1)
+                continue
+
             frame = ImageGrab.grab()
 
             t0 = time.perf_counter()
             answer, source = analyze_frame(frame, prompt=prompt, gate=gate)
             elapsed = time.perf_counter() - t0
+
+            # If PAUSE arrived while Ollama was already processing a frame,
+            # discard that in-flight result rather than counting break-screen
+            # activity as focus telemetry.
+            if pause_requested.is_set() or stop_requested.is_set():
+                continue
 
             distracted, confidence = parse_status_and_confidence(answer)
 
@@ -242,11 +279,30 @@ def run_screen_capture_loop(task):
             if not distracted:
                 focused_count += 1
 
+            current_avg = round((focused_count / total_count) * 100)
+            session_elapsed = round(time.perf_counter() - session_start_time)
+
+            # Standardized telemetry output (without confidence)
+            telemetry_data = {
+                "elapsed": session_elapsed,
+                "status": "DISTRACTED" if distracted else "ON_TASK",
+                "score": current_avg
+            }
+            print(f"TELEMETRY: {json.dumps(telemetry_data)}")
+            sys.stdout.flush()
+
             if distracted:
-                current_avg = round((focused_count / total_count) * 100)
+                distraction_data = {
+                    "verdict": "DISTRACTED",
+                    "elapsed_seconds": session_elapsed,
+                    "occurred_at": datetime.now().astimezone().isoformat(),
+                    "explanation": parse_reason(answer),
+                }
+                print(f"DISTRACTION_LOG: {json.dumps(distraction_data, ensure_ascii=False)}")
+                sys.stdout.flush()
+
                 print(f"\n[{time.strftime('%X')}] {source}: DISTRACTED (confidence: {confidence}%)")
                 print(answer)
-                print(f"CURRENT_SCORE: {current_avg}")
 
             if source.startswith("VLM"):
                 if ema_t_inference is None:
@@ -270,10 +326,8 @@ def run_screen_capture_loop(task):
             if distracted:
                 print(f"⏳ inference {elapsed:.1f}s | interval {target_T:.1f}s | sleeping {sleep_time:.1f}s...")
 
-            # Sleep in short slices so a STOP request is honored promptly
-            # instead of waiting out the full (up to ~2 minute) interval.
             slept = 0.0
-            while slept < sleep_time and not stop_requested.is_set():
+            while slept < sleep_time and not stop_requested.is_set() and not pause_requested.is_set():
                 chunk = min(0.5, sleep_time - slept)
                 time.sleep(chunk)
                 slept += chunk
@@ -284,7 +338,10 @@ def run_screen_capture_loop(task):
         except Exception as e:
             print(f"\nAn error occurred: {e}")
             print("Retrying in 10 seconds...")
-            time.sleep(10)
+            waited = 0.0
+            while waited < 10 and not stop_requested.is_set() and not pause_requested.is_set():
+                time.sleep(0.5)
+                waited += 0.5
 
     print("\nStopping the screen tracker!")
 

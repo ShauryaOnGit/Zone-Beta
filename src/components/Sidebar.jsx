@@ -1,8 +1,24 @@
+import { useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import ZoneLogo from './ZoneLogo';
 
 export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, onSignOut, user }) {
   const displayName = user?.user_metadata?.username || user?.username || 'Guest';
+
+  useEffect(() => {
+    const handlePinnedTaskFocusRequest = () => {
+      // UpcomingEvents has already placed the task title in sessionStorage.
+      // Reuse the same app-level opener as the normal "Start Focus Session" button.
+      if (!focusModeActive) {
+        onStartFocus?.();
+      }
+    };
+
+    window.addEventListener('zone:start-focus-request', handlePinnedTaskFocusRequest);
+    return () => {
+      window.removeEventListener('zone:start-focus-request', handlePinnedTaskFocusRequest);
+    };
+  }, [focusModeActive, onStartFocus]);
 
   return (
     <aside className="w-72 h-screen bg-white border-r border-slate-100 p-6 flex flex-col justify-between">
@@ -22,6 +38,11 @@ export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, on
           <NavLink to="/profile" end className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
             Profile
           </NavLink>
+          <NavLink to="/analytics" className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}
+      >
+        <span>Analytics</span>
+        
+      </NavLink>
         </nav>
 
         <button onClick={focusModeActive ? onStopFocus : onStartFocus} className={`w-full text-white text-sm font-semibold py-3 px-4 rounded-md ${focusModeActive ? "bg-rose-600" : "bg-slate-900"}`}>

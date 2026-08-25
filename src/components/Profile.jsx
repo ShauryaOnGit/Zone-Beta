@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
+import { computeFairScore } from '../lib/focusAnalytics';
 import FeedCard from '../FeedCard';
 import { feedCardThemes } from '../feedCardThemes';
 
@@ -62,21 +63,42 @@ function EditPostModal({ post, userId, onClose, onSaved }) {
         bgImageUrl = data.publicUrl;
       }
 
-      const { error: updateError } = await supabase
+      // Persist the edit and require Supabase to return the row that was
+      // actually updated. With RLS, an UPDATE can affect zero rows without
+      // looking like a frontend failure unless we explicitly verify it.
+      const { data: updatedPost, error: updateError } = await supabase
         .from('feed_posts')
         .update({
           title: title.trim(),
           theme_id: selectedTheme,
           bg_image: bgImageUrl,
         })
-        .eq('id', post.rawId);
+        .eq('id', post.rawId)
+        .eq('user_id', userId)
+        .select('id, title, theme_id, bg_image')
+        .maybeSingle();
 
       if (updateError) throw updateError;
 
-      onSaved(post.rawId, { title: title.trim(), themeId: selectedTheme, bgImage: bgImageUrl });
+      if (!updatedPost) {
+        throw new Error(
+          'Supabase did not update this post. Check the feed_posts UPDATE RLS policy for authenticated owners.'
+        );
+      }
+
+      // Update the UI only from the values Supabase confirms were persisted.
+      onSaved(updatedPost.id, {
+        title: updatedPost.title,
+        themeId: updatedPost.theme_id,
+        bgImage: updatedPost.bg_image || undefined,
+      });
     } catch (err) {
-      console.error('Failed to update post:', err);
-      setError('Could not save changes. Please try again.');
+      console.error('Failed to persist post update to Supabase:', err);
+      setError(
+        err?.message?.includes('UPDATE RLS policy')
+          ? 'This edit was not saved. Supabase is blocking post updates for this account.'
+          : 'Could not save changes. Please try again.'
+      );
     } finally {
       setIsSaving(false);
     }
@@ -231,8 +253,8 @@ export default function Profile() {
         setLastFocusedAt(posts.length > 0 ? posts[0].created_at : null);
 
         const validScores = posts
-          .map((p) => parseFloat(p.focus_score))
-          .filter((n) => !isNaN(n));
+          .map((p) => computeFairScore(p.score_timeline) ?? parseFloat(p.focus_score))
+          .filter((n) => n != null && !isNaN(n));
         setAverageFocusScore(
           validScores.length > 0
             ? Math.round(validScores.reduce((sum, n) => sum + n, 0) / validScores.length)
@@ -289,7 +311,7 @@ export default function Profile() {
             date: formattedDate,
             title: post.title,
             timeElapsed: post.time_elapsed,
-            focusScore: String(post.focus_score),
+            focusScore: String(computeFairScore(post.score_timeline) ?? post.focus_score),
             themeId: post.theme_id,
             bgImage: post.bg_image || undefined,
             initialReactions: postReactions,
@@ -330,6 +352,12 @@ export default function Profile() {
       prev.map((p) => (p.rawId === rawId ? { ...p, ...updates } : p))
     );
     setEditingPost(null);
+  };
+
+  const handleOpenSummary = (rawId) => {
+    navigate('/analytics', {
+      state: { targetPostId: rawId, openSessionSummary: true },
+    });
   };
 
   const handleAvatarUpload = async (e) => {
@@ -404,83 +432,107 @@ export default function Profile() {
         </div>
       )}
 
-      <div className="rounded-sm border border-[#D0D7DE] bg-slate-50 p-6 space-y-5 max-w-md shadow-sm">
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            <img
-              src={profile?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.id}`}
-              alt="Profile"
-              className="w-16 h-16 rounded-full object-cover border border-slate-200 bg-white"
-            />
-            {isUploadingAvatar && (
-              <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center">
-                <span className="text-white text-[10px]">...</span>
-              </div>
-            )}
+      <div className="rounded-md border border-[#D0D7DE] bg-white p-7 shadow-sm text-slate-900 overflow-hidden">
+        <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
+          <div className="flex items-center gap-5 min-w-0">
+            <div className="relative shrink-0 group">
+              <label
+                className="relative block w-20 h-20 rounded-full cursor-pointer overflow-hidden"
+                title={profile?.avatar_url ? 'Change photo' : 'Upload photo'}
+              >
+                <img
+                  src={profile?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.id}`}
+                  alt="Profile"
+                  className="w-20 h-20 rounded-full object-cover border border-[#D0D7DE] bg-white"
+                />
+
+                <div className="absolute inset-0 rounded-full bg-slate-900/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="white"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                </div>
+
+                {isUploadingAvatar && (
+                  <div className="absolute inset-0 rounded-full bg-slate-900/55 flex items-center justify-center">
+                    <span className="text-white text-[10px] font-semibold">...</span>
+                  </div>
+                )}
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarUpload}
+                  disabled={isUploadingAvatar}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-2xl font-bold text-slate-900 truncate">
+                {profile?.username || '—'}
+              </p>
+              <p className="mt-1 text-sm text-slate-500 truncate">
+                {user?.email || '—'}
+              </p>
+
+              {avatarError && (
+                <p className="mt-2 text-xs text-red-600">{avatarError}</p>
+              )}
+            </div>
           </div>
-          <div>
-            <label className="inline-block text-xs font-semibold text-indigo-600 hover:text-indigo-500 cursor-pointer">
-              {profile?.avatar_url ? 'Change photo' : 'Upload photo'}
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleAvatarUpload}
-                disabled={isUploadingAvatar}
-                className="hidden"
-              />
-            </label>
-            {avatarError && (
-              <p className="text-xs text-red-600 mt-1">{avatarError}</p>
-            )}
+
+          <div className="shrink-0 text-center min-w-[150px]">
+            <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+              Avg Focus Score
+            </p>
+            <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
+              {postsLoading
+                ? '—'
+                : averageFocusScore !== null
+                ? averageFocusScore
+                : '—'}
+            </p>
           </div>
         </div>
 
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Username</p>
-          <p className="mt-1 text-xl font-semibold text-slate-900">{profile?.username || '—'}</p>
-        </div>
+        <div className="mt-8 flex flex-wrap gap-x-8 gap-y-2 text-sm text-slate-500">
+          <span>
+            Last focused{' '}
+            <strong className="font-semibold text-slate-800">
+              {postsLoading
+                ? 'Loading...'
+                : lastFocusedAt
+                ? formatTimeSince(lastFocusedAt)
+                : "Haven't started focusing yet"}
+            </strong>
+          </span>
 
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Avg Focus Score</p>
-          <p className="mt-1 text-xl font-semibold text-slate-900">
-            {postsLoading
-              ? 'Loading...'
-              : averageFocusScore !== null
-              ? averageFocusScore
-              : '—'}
-          </p>
+          <span>
+            Member since{' '}
+            <strong className="font-semibold text-slate-800">
+              {profile?.created_at
+                ? new Date(profile.created_at).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })
+                : '—'}
+            </strong>
+          </span>
         </div>
-
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Email</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">{user?.email || '—'}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Last Focused</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">
-            {postsLoading
-              ? 'Loading...'
-              : lastFocusedAt
-              ? formatTimeSince(lastFocusedAt)
-              : "Haven't started focusing yet"}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.1em] text-slate-500">Member since</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">
-            {profile?.created_at
-              ? new Date(profile.created_at).toLocaleDateString(undefined, {
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                })
-              : '—'}
-          </p>
-        </div>
-
-        
-
-        
       </div>
 
       <div className="mt-10">
@@ -511,7 +563,7 @@ export default function Profile() {
 
                 <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
                   {confirmingDeleteId === card.rawId ? (
-                    <div className="bg-slate-900/95 border border-white/20 p-2.5 rounded-md shadow-xl flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
+                    <div className="bg-slate-900/95 border border-[#D0D7DE] p-2.5 rounded-md shadow-xl flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
                       <span className="text-xs text-white font-medium pl-1">Delete card?</span>
                       <button
                         onClick={() => handleDeletePost(card.rawId)}
@@ -530,6 +582,19 @@ export default function Profile() {
                     </div>
                   ) : (
                     <>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenSummary(card.rawId);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-emerald-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
+                        title="Open session summary"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 3v18h18" />
+                          <path d="m7 16 4-4 3 3 5-7" />
+                        </svg>
+                      </button>
                       <button
                         onClick={() => setEditingPost(card)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-indigo-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
