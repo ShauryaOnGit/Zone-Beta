@@ -55,7 +55,7 @@ export default function LowDopamineBreak({ durationSeconds = 300, onComplete, on
   const secs = remaining % 60;
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#0F172A] flex flex-col items-center justify-center text-white select-none">
+    <div className="fixed inset-0 z-50 bg-slate-900 flex flex-col items-center justify-center text-white select-none">
       <style>{`
         @keyframes zoneBreathe {
           0%   { transform: scale(0.72); opacity: 0.55; }

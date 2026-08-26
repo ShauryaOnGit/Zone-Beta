@@ -24,6 +24,30 @@ function scoreToCoverOpacity(score) {
 const OPTIMAL_BREAKS_STORAGE_PREFIX = 'zone:optimal-breaks:';
 
 
+function buildSmoothPath(coords) {
+  if (coords.length === 0) return '';
+  if (coords.length === 1) return `M ${coords[0].x} ${coords[0].y}`;
+
+  let path = `M ${coords[0].x} ${coords[0].y}`;
+
+  for (let i = 0; i < coords.length - 1; i += 1) {
+    const p0 = coords[i - 1] || coords[i];
+    const p1 = coords[i];
+    const p2 = coords[i + 1];
+    const p3 = coords[i + 2] || p2;
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+  }
+
+  return path;
+}
+
+
 // ---------------------------------------------------------------------------
 // Small chart primitives (light theme, matches Feed/Profile card styling)
 // ---------------------------------------------------------------------------
@@ -44,20 +68,11 @@ function AttentionProgressionChart({ points }) {
   const xFor = (i) => padding + (i / (points.length - 1)) * (width - padding * 2);
   const yFor = (score) => height - padding - (score / 100) * (height - padding * 2);
 
-  const linePoints = points.map((p, i) => `${xFor(i)},${yFor(p.score)}`).join(' ');
-
-  // simple linear regression for a trend line
-  const n = points.length;
-  const xs = points.map((_, i) => i);
-  const ys = points.map((p) => p.score);
-  const xMean = xs.reduce((a, b) => a + b, 0) / n;
-  const yMean = ys.reduce((a, b) => a + b, 0) / n;
-  const slopeNum = xs.reduce((sum, x, i) => sum + (x - xMean) * (ys[i] - yMean), 0);
-  const slopeDen = xs.reduce((sum, x) => sum + (x - xMean) ** 2, 0);
-  const slope = slopeDen === 0 ? 0 : slopeNum / slopeDen;
-  const intercept = yMean - slope * xMean;
-  const trendStart = intercept;
-  const trendEnd = slope * (n - 1) + intercept;
+  const lineCoords = points.map((p, i) => ({
+    x: xFor(i),
+    y: yFor(p.score),
+  }));
+  const linePath = buildSmoothPath(lineCoords);
 
   return (
     <div className="w-full">
@@ -66,25 +81,13 @@ function AttentionProgressionChart({ points }) {
         <line x1={padding} y1={height / 2} x2={width - padding} y2={height / 2} stroke="#E2E8F0" strokeDasharray="4" />
         <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#CBD5E1" />
 
-        {/* trend line */}
-        <line
-          x1={xFor(0)}
-          y1={yFor(Math.max(0, Math.min(100, trendStart)))}
-          x2={xFor(n - 1)}
-          y2={yFor(Math.max(0, Math.min(100, trendEnd)))}
-          stroke="#16A34A"
-          strokeWidth="2"
-          strokeDasharray="6 4"
-          opacity="0.55"
-        />
-
-        <polyline
+        <path
+          d={linePath}
           fill="none"
-          stroke="bg-slate-900"
+          stroke="#0F172A"
           strokeWidth="3"
           strokeLinecap="round"
           strokeLinejoin="round"
-          points={linePoints}
         />
 
         {points.map((p, i) => (
@@ -93,10 +96,6 @@ function AttentionProgressionChart({ points }) {
       </svg>
       <div className="flex justify-between text-xs text-slate-500 mt-2">
         <span>{new Date(points[0].date).toLocaleDateString()}</span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-0.5 bg-green-600" style={{ opacity: 0.6 }} />
-          trend
-        </span>
         <span>{new Date(points[points.length - 1].date).toLocaleDateString()}</span>
       </div>
     </div>
@@ -434,6 +433,55 @@ function tipPresentation(tip) {
     action: 'Keep logging sessions so Zone can sharpen this recommendation.',
   };
 }
+
+function normalizeFocusSink(value) {
+  const sink = String(value || '').trim();
+  if (!sink) return null;
+
+  const normalized = sink.toLowerCase();
+  if (['n/a', 'na', 'unknown', 'none', 'unsure', 'unidentified'].includes(normalized)) {
+    return null;
+  }
+
+  return sink;
+}
+
+function computeFocusSinks(sessions) {
+  const counts = new Map();
+
+  for (const session of sessions || []) {
+    let logs = session?.distracted_logs;
+
+    if (typeof logs === 'string') {
+      try {
+        logs = JSON.parse(logs);
+      } catch {
+        logs = [];
+      }
+    }
+
+    if (!Array.isArray(logs)) continue;
+
+    for (const log of logs) {
+      const sink = normalizeFocusSink(log?.sink);
+      if (!sink) continue;
+
+      const key = sink.toLowerCase();
+      const existing = counts.get(key);
+
+      if (existing) {
+        existing.count += 1;
+      } else {
+        counts.set(key, { name: sink, count: 1 });
+      }
+    }
+  }
+
+  return [...counts.values()]
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, 3);
+}
+
 
 function splitTipBody(body = '') {
   const parts = body.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((part) => part.trim()).filter(Boolean) || [];
@@ -865,6 +913,7 @@ export function Analytics({ session }) {
   const optimalSession = useMemo(() => computeOptimalSession(sessionsData), [sessionsData]);
   const timeOfDayTrends = useMemo(() => computeTimeOfDayTrends(sessionsData), [sessionsData]);
   const attentionProgression = useMemo(() => computeAttentionProgression(sessionsData), [sessionsData]);
+  const focusSinks = useMemo(() => computeFocusSinks(sessionsData), [sessionsData]);
   const tips = useMemo(
     () => generateTips({ optimalSession, timeOfDayTrends, sessions: sessionsData }),
     [optimalSession, timeOfDayTrends, sessionsData]
@@ -1077,6 +1126,46 @@ export function Analytics({ session }) {
                 </div>
               )}
             </div>
+          </section>
+
+          {/* Focus Sinks */}
+          <section className="relative overflow-hidden rounded-md border border-[#D0D7DE] bg-white p-7 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-900">Focus Sinks</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  The apps and websites that appear most often in your recent distracted verdicts.
+                </p>
+              </div>
+            </div>
+
+            {focusSinks.length > 0 ? (
+              <div className="mt-6 divide-y divide-slate-200">
+                {focusSinks.map((sink, index) => (
+                  <div
+                    key={sink.name.toLowerCase()}
+                    className="flex items-center justify-between gap-5 py-4 first:pt-0 last:pb-0"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="w-6 text-xs font-semibold tabular-nums text-slate-400">
+                        {index + 1}
+                      </span>
+                      <span className="truncate text-sm font-semibold text-slate-900">
+                        {sink.name}
+                      </span>
+                    </div>
+
+                    <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold tabular-nums text-slate-600">
+                      {sink.count} {sink.count === 1 ? 'hit' : 'hits'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-6 text-sm text-slate-500">
+                No identifiable focus sinks yet. New distracted verdicts will build this list.
+              </p>
+            )}
           </section>
 
           {/* Time of Day */}

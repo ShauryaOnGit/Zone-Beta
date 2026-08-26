@@ -3,6 +3,37 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 
+function getInitials(name) {
+  const value = String(name || '').trim();
+  if (!value) return '?';
+
+  const parts = value.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ''}${parts[parts.length - 1][0] || ''}`.toUpperCase();
+}
+
+function initialsAvatarDataUrl(name) {
+  const initials = getInitials(name);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+      <rect width="160" height="160" rx="80" fill="#E2E8F0"/>
+      <text
+        x="80"
+        y="84"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="58"
+        font-weight="700"
+        fill="#334155"
+      >${initials}</text>
+    </svg>
+  `;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+
 function ProfileActionCard({ profile, navigate, children }) {
   return (
     <div className="w-full rounded-sm border border-[#D0D7DE] bg-white p-6 space-y-5 shadow-sm">
@@ -11,7 +42,7 @@ function ProfileActionCard({ profile, navigate, children }) {
         onClick={() => navigate(`/profile/${profile.user_id}`)}
       >
         <img
-          src={profile.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.user_id}`}
+          src={profile.avatar_url || initialsAvatarDataUrl(profile.username)}
           alt={profile.username}
           className="w-14 h-14 rounded-full object-cover border border-slate-200 bg-white group-hover/user:opacity-80 transition-opacity flex-shrink-0"
         />

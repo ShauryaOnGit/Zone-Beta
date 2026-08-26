@@ -6,6 +6,37 @@ import { computeFairScore } from '../lib/focusAnalytics';
 import FeedCard from '../FeedCard';
 import { feedCardThemes } from '../feedCardThemes';
 
+function getInitials(name) {
+  const value = String(name || '').trim();
+  if (!value) return '?';
+
+  const parts = value.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ''}${parts[parts.length - 1][0] || ''}`.toUpperCase();
+}
+
+function initialsAvatarDataUrl(name) {
+  const initials = getInitials(name);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+      <rect width="160" height="160" rx="80" fill="#E2E8F0"/>
+      <text
+        x="80"
+        y="84"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="58"
+        font-weight="700"
+        fill="#334155"
+      >${initials}</text>
+    </svg>
+  `;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+
 function formatTimeSince(dateStr) {
   const then = new Date(dateStr);
   if (isNaN(then)) return null;
@@ -26,6 +57,92 @@ function formatTimeSince(dateStr) {
 
   const diffYears = Math.floor(diffDays / 365);
   return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
+}
+
+
+function parseSessionLength(value) {
+  if (value == null) return null;
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  const parts = text.split(':').map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) return null;
+
+  if (parts.length === 2) {
+    const [minutes, seconds] = parts;
+    return minutes * 60 + seconds;
+  }
+
+  if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  return null;
+}
+
+function formatAverageSessionLength(totalSeconds) {
+  if (totalSeconds == null || !Number.isFinite(totalSeconds)) return '—';
+
+  const roundedMinutes = Math.round(totalSeconds / 60);
+
+  if (roundedMinutes < 1) return '<1m';
+  if (roundedMinutes < 60) return `${roundedMinutes}m`;
+
+  const hours = Math.floor(roundedMinutes / 60);
+  const minutes = roundedMinutes % 60;
+
+  return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
+}
+
+
+function zoneDownloadFileName() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+
+  return `zone${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
+}
+
+async function exportFeedCardPng(card) {
+  const { toPng } = await import('html-to-image');
+  const node = Array.from(document.querySelectorAll('[data-share-card-id]')).find(
+    (element) => element.dataset.shareCardId === String(card.rawId)
+  );
+
+  if (!node) {
+    throw new Error('Could not find the feed card to export.');
+  }
+
+  // Export the actual rendered FeedCard at 2x resolution so text and UI stay
+  // crisp when posted to social media.
+  const dataUrl = await toPng(node, {
+    cacheBust: true,
+    pixelRatio: 2,
+  });
+
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const fileName = zoneDownloadFileName();
+
+  // Download the PNG directly to the system's normal download location.
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function EditPostModal({ post, userId, onClose, onSaved }) {
@@ -208,7 +325,9 @@ export default function Profile() {
   const [avatarError, setAvatarError] = useState('');
   const [lastFocusedAt, setLastFocusedAt] = useState(null);
   const [averageFocusScore, setAverageFocusScore] = useState(null);
+  const [averageSessionLengthSeconds, setAverageSessionLengthSeconds] = useState(null);
   const [editingPost, setEditingPost] = useState(null);
+  const [downloadingPostId, setDownloadingPostId] = useState(null);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -261,6 +380,16 @@ export default function Profile() {
             : null
         );
 
+        const validSessionLengths = posts
+          .map((p) => parseSessionLength(p.time_elapsed))
+          .filter((seconds) => seconds != null && Number.isFinite(seconds));
+
+        setAverageSessionLengthSeconds(
+          validSessionLengths.length > 0
+            ? validSessionLengths.reduce((sum, seconds) => sum + seconds, 0) / validSessionLengths.length
+            : null
+        );
+
         // 2. Fetch reactions for user's posts
         let reactionsMap = {};
         if (postIds.length > 0) {
@@ -306,10 +435,11 @@ export default function Profile() {
             id: `live-${post.id}`,
             rawId: post.id,
             userId: post.user_id,
-            userName: 'You',
-            userAvatar: resolvedAvatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${post.user_id}`,
+            userName: data?.username || session.user?.email || 'User',
+            userAvatar: resolvedAvatarUrl || initialsAvatarDataUrl(data?.username || session.user?.email || 'User'),
             date: formattedDate,
             title: post.title,
+            goal: post.task_name || post.title,
             timeElapsed: post.time_elapsed,
             focusScore: String(computeFairScore(post.score_timeline) ?? post.focus_score),
             themeId: post.theme_id,
@@ -352,6 +482,20 @@ export default function Profile() {
       prev.map((p) => (p.rawId === rawId ? { ...p, ...updates } : p))
     );
     setEditingPost(null);
+  };
+
+  const handleDownloadPost = async (card) => {
+    if (!card?.rawId || downloadingPostId) return;
+
+    setDownloadingPostId(card.rawId);
+    try {
+      await exportFeedCardPng(card);
+    } catch (err) {
+      console.error('Failed to export feed card:', err);
+      alert('Could not create the download image. Please try again.');
+    } finally {
+      setDownloadingPostId(null);
+    }
   };
 
   const handleOpenSummary = (rawId) => {
@@ -441,7 +585,7 @@ export default function Profile() {
                 title={profile?.avatar_url ? 'Change photo' : 'Upload photo'}
               >
                 <img
-                  src={profile?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.id}`}
+                  src={profile?.avatar_url || initialsAvatarDataUrl(profile?.username || user?.email || 'You')}
                   alt="Profile"
                   className="w-20 h-20 rounded-full object-cover border border-[#D0D7DE] bg-white"
                 />
@@ -494,17 +638,31 @@ export default function Profile() {
             </div>
           </div>
 
-          <div className="shrink-0 text-center min-w-[150px]">
-            <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
-              Avg Focus Score
-            </p>
-            <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
-              {postsLoading
-                ? '—'
-                : averageFocusScore !== null
-                ? averageFocusScore
-                : '—'}
-            </p>
+          <div className="shrink-0 grid grid-cols-2 gap-x-8 md:gap-x-10">
+            <div className="text-center min-w-[140px]">
+              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                Avg Session Length
+              </p>
+              <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
+                {postsLoading
+                  ? '—'
+                  : formatAverageSessionLength(averageSessionLengthSeconds)}
+              </p>
+            </div>
+            <div className="text-center min-w-[140px]">
+              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                Avg Focus Score
+              </p>
+              <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
+                {postsLoading
+                  ? '—'
+                  : averageFocusScore !== null
+                  ? averageFocusScore
+                  : '—'}
+              </p>
+            </div>
+
+            
           </div>
         </div>
 
@@ -551,15 +709,17 @@ export default function Profile() {
             const theme = feedCardThemes.find((t) => t.id === card.themeId) ?? feedCardThemes[0];
             return (
               <div key={card.id} className="relative group break-inside-avoid mb-6">
-                <FeedCard
-                  {...card}
-                  cardId={card.rawId}
-                  currentUserId={user?.id}
-                  supabase={supabase}
-                  bgGradient={theme.gradient}
-                  fadeColor={theme.fadeColor}
-                  onUserClick={undefined}
-                />
+                <div data-share-card-id={String(card.rawId)}>
+                  <FeedCard
+                    {...card}
+                    cardId={card.rawId}
+                    currentUserId={user?.id}
+                    supabase={supabase}
+                    bgGradient={theme.gradient}
+                    fadeColor={theme.fadeColor}
+                    onUserClick={undefined}
+                  />
+                </div>
 
                 <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
                   {confirmingDeleteId === card.rawId ? (
@@ -590,17 +750,36 @@ export default function Profile() {
                         className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-emerald-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
                         title="Open session summary"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M3 3v18h18" />
                           <path d="m7 16 4-4 3 3 5-7" />
                         </svg>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownloadPost(card);
+                        }}
+                        disabled={downloadingPostId === card.rawId}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-sky-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer disabled:opacity-50"
+                        title="Download feed card as PNG"
+                      >
+                        {downloadingPostId === card.rawId ? (
+                          <span className="block w-[10px] h-[10px] rounded-full border border-white/40 border-t-white animate-spin" />
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 3v12" />
+                            <path d="m7 10 5 5 5-5" />
+                            <path d="M5 21h14" />
+                          </svg>
+                        )}
                       </button>
                       <button
                         onClick={() => setEditingPost(card)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-indigo-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
                         title="Edit your feed card"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                         </svg>
@@ -610,7 +789,7 @@ export default function Profile() {
                         className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-rose-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
                         title="Delete your feed card"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="3 6 5 6 21 6" />
                           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                         </svg>

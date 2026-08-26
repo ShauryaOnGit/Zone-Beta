@@ -6,6 +6,37 @@ import { computeFairScore } from '../lib/focusAnalytics';
 import FeedCard from '../FeedCard';
 import { feedCardThemes } from '../feedCardThemes';
 
+function getInitials(name) {
+  const value = String(name || '').trim();
+  if (!value) return '?';
+
+  const parts = value.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ''}${parts[parts.length - 1][0] || ''}`.toUpperCase();
+}
+
+function initialsAvatarDataUrl(name) {
+  const initials = getInitials(name);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+      <rect width="160" height="160" rx="80" fill="#E2E8F0"/>
+      <text
+        x="80"
+        y="84"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="58"
+        font-weight="700"
+        fill="#334155"
+      >${initials}</text>
+    </svg>
+  `;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+
 function formatTimeSince(dateStr) {
   const then = new Date(dateStr);
   if (isNaN(then)) return null;
@@ -28,6 +59,52 @@ function formatTimeSince(dateStr) {
   return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
 }
 
+
+function parseSessionLength(value) {
+  if (value == null) return null;
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  const parts = text.split(':').map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) return null;
+
+  if (parts.length === 2) {
+    const [minutes, seconds] = parts;
+    return minutes * 60 + seconds;
+  }
+
+  if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  return null;
+}
+
+function formatAverageSessionLength(totalSeconds) {
+  if (totalSeconds == null || !Number.isFinite(totalSeconds)) return '—';
+
+  const roundedMinutes = Math.round(totalSeconds / 60);
+
+  if (roundedMinutes < 1) return '<1m';
+  if (roundedMinutes < 60) return `${roundedMinutes}m`;
+
+  const hours = Math.floor(roundedMinutes / 60);
+  const minutes = roundedMinutes % 60;
+
+  return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
+}
+
 export default function UserProfile() {
   const navigate = useNavigate();
   const { userId } = useParams();
@@ -41,6 +118,7 @@ export default function UserProfile() {
   const [notFound, setNotFound] = useState(false);
   const [lastFocusedAt, setLastFocusedAt] = useState(null);
   const [averageFocusScore, setAverageFocusScore] = useState(null);
+  const [averageSessionLengthSeconds, setAverageSessionLengthSeconds] = useState(null);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -95,7 +173,7 @@ export default function UserProfile() {
       // contribute to their overall average focus score.
       const { data: scorePostsData, error: scorePostsError } = await supabase
         .from('feed_posts')
-        .select('focus_score, score_timeline')
+        .select('focus_score, score_timeline, time_elapsed')
         .eq('user_id', userId);
 
       if (scorePostsError) {
@@ -108,6 +186,16 @@ export default function UserProfile() {
         setAverageFocusScore(
           validScores.length > 0
             ? Math.round(validScores.reduce((sum, n) => sum + n, 0) / validScores.length)
+            : null
+        );
+
+        const validSessionLengths = (scorePostsData || [])
+          .map((p) => parseSessionLength(p.time_elapsed))
+          .filter((seconds) => seconds != null && Number.isFinite(seconds));
+
+        setAverageSessionLengthSeconds(
+          validSessionLengths.length > 0
+            ? validSessionLengths.reduce((sum, seconds) => sum + seconds, 0) / validSessionLengths.length
             : null
         );
       }
@@ -165,9 +253,10 @@ export default function UserProfile() {
             rawId: post.id,
             userId: post.user_id,
             userName: data.username || 'Fellow User',
-            userAvatar: resolvedAvatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${post.user_id}`,
+            userAvatar: resolvedAvatarUrl || initialsAvatarDataUrl(data.username || 'User'),
             date: formattedDate,
             title: post.title,
+            goal: post.task_name || post.title,
             timeElapsed: post.time_elapsed,
             focusScore: String(computeFairScore(post.score_timeline) ?? post.focus_score),
             themeId: post.theme_id,
@@ -242,7 +331,7 @@ export default function UserProfile() {
           <div className="flex items-center gap-5 min-w-0">
             <div className="relative shrink-0">
               <img
-                src={profile?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`}
+                src={profile?.avatar_url || initialsAvatarDataUrl(profile?.username || 'User')}
                 alt="Profile"
                 className="w-20 h-20 rounded-full object-cover border border-[#D0D7DE] bg-white"
               />
@@ -255,17 +344,31 @@ export default function UserProfile() {
             </div>
           </div>
 
-          <div className="shrink-0 text-center min-w-[150px]">
-            <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
-              Avg Focus Score
-            </p>
-            <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
-              {postsLoading
-                ? '—'
-                : averageFocusScore !== null
-                ? averageFocusScore
-                : '—'}
-            </p>
+          <div className="shrink-0 grid grid-cols-2 gap-x-8 md:gap-x-10">
+            
+
+            <div className="text-center min-w-[140px]">
+              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                Avg Session Length
+              </p>
+              <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
+                {postsLoading
+                  ? '—'
+                  : formatAverageSessionLength(averageSessionLengthSeconds)}
+              </p>
+            </div>
+            <div className="text-center min-w-[140px]">
+              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                Avg Focus Score
+              </p>
+              <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
+                {postsLoading
+                  ? '—'
+                  : averageFocusScore !== null
+                  ? averageFocusScore
+                  : '—'}
+              </p>
+            </div>
           </div>
         </div>
 

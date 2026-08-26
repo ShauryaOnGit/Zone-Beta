@@ -45,7 +45,7 @@ export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, on
       </NavLink>
         </nav>
 
-        <button onClick={focusModeActive ? onStopFocus : onStartFocus} className={`w-full text-white text-sm font-semibold py-3 px-4 rounded-md ${focusModeActive ? "bg-rose-600" : "bg-slate-900"}`}>
+        <button onClick={focusModeActive ? onStopFocus : onStartFocus} className={`w-full text-white cursor-pointer text-sm font-semibold py-3 px-4 rounded-md ${focusModeActive ? "bg-rose-600" : "bg-slate-900"}`}>
           {focusModeActive ? 'End Focus Session' : 'Start Focus Session'}
         </button>
       </div>
@@ -53,7 +53,7 @@ export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, on
       <div className="space-y-3">
         <button
           onClick={onSignOut}
-          className="w-full text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md py-3 transition-colors"
+          className="w-full text-sm font-semibold cursor-pointer text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md py-3 transition-colors"
         >
           Sign out
         </button>

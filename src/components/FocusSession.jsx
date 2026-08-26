@@ -12,6 +12,97 @@ const MINI_SIZE = { width: 280, height: 130 };
 const OPTIMAL_BREAKS_STORAGE_PREFIX = 'zone:optimal-breaks:';
 
 
+function formatActivityTime(totalSeconds) {
+  const total = Number(totalSeconds);
+  if (!Number.isFinite(total) || total < 0) return '—';
+
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.floor(total % 60);
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function buildSessionActivity(logs, distractionLogs) {
+  const items = [];
+
+  const distractionByElapsed = new Map(
+    (distractionLogs || []).map((log) => [Number(log.elapsed_seconds), log])
+  );
+
+  for (const raw of logs || []) {
+    const line = String(raw || '').trim();
+    if (!line) continue;
+
+    try {
+      if (line.includes('TELEMETRY:')) {
+        const payload = JSON.parse(line.split('TELEMETRY:')[1].trim());
+        const elapsed = Number(payload.elapsed);
+
+        if (payload.status === 'ON_TASK') {
+          items.push({
+            key: `focus-${elapsed}-${items.length}`,
+            elapsed,
+            type: 'focused',
+            label: 'Focused',
+            detail: 'Activity matched your goal.',
+            score: payload.score,
+          });
+        } else if (payload.status === 'DISTRACTED') {
+          const distraction = distractionByElapsed.get(elapsed);
+          const sink =
+            distraction?.sink && String(distraction.sink).toLowerCase() !== 'n/a'
+              ? String(distraction.sink)
+              : null;
+
+          items.push({
+            key: `distracted-${elapsed}-${items.length}`,
+            elapsed,
+            type: 'distracted',
+            label: 'Distracted',
+            detail:
+              distraction?.explanation ||
+              'Activity did not match your goal.',
+            sink,
+            score: payload.score,
+          });
+        }
+
+        continue;
+      }
+
+      if (line.includes('AD_NEUTRAL:')) {
+        const payload = JSON.parse(line.split('AD_NEUTRAL:')[1].trim());
+        items.push({
+          key: `ad-${payload.elapsed_seconds}-${items.length}`,
+          elapsed: Number(payload.elapsed_seconds),
+          type: 'ad',
+          label: 'Ad ignored',
+          detail: payload.reason || 'A YouTube ad was detected and excluded from your score.',
+          score: payload.score,
+        });
+        continue;
+      }
+
+      if (line.includes('NEUTRAL_SAMPLE:')) {
+        const payload = JSON.parse(line.split('NEUTRAL_SAMPLE:')[1].trim());
+        items.push({
+          key: `neutral-${payload.elapsed_seconds}-${items.length}`,
+          elapsed: Number(payload.elapsed_seconds),
+          type: 'neutral',
+          label: 'Unclear',
+          detail: payload.reason || 'Zone could not confidently classify this check.',
+          score: payload.score,
+        });
+      }
+    } catch {
+      // Raw technical output stays available below; malformed debug lines
+      // should never break the readable activity timeline.
+    }
+  }
+
+  return items.sort((a, b) => (a.elapsed || 0) - (b.elapsed || 0));
+}
+
+
 function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, scoreTimeline, onClose }) {
   const [selectedTheme, setSelectedTheme] = useState(feedCardThemes[0].id);
   const [imageFile, setImageFile] = useState(null);
@@ -27,6 +118,11 @@ function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, s
     if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
+
+  const activityItems = buildSessionActivity(logs, distractionLogs);
+  const focusedChecks = activityItems.filter((item) => item.type === 'focused').length;
+  const distractedChecks = activityItems.filter((item) => item.type === 'distracted').length;
+  const ignoredAds = activityItems.filter((item) => item.type === 'ad').length;
 
   const handleSaveSession = async (isPrivate = false) => {
     setIsSubmitting(true);
@@ -79,16 +175,16 @@ function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, s
   };
 
   return (
-    <div className="fixed inset-0 bg-[#0F172A] text-white flex flex-col z-50 overflow-y-auto p-10">
+    <div className="fixed inset-0 bg-slate-900 text-white flex flex-col z-50 overflow-y-auto p-10">
       <div className="max-w-3xl mx-auto w-full bg-[#1E293B] rounded-md p-8 shadow-2xl border border-[rgba(255,255,255,0.1)]">
         <h2 className="text-3xl font-bold mb-6">Session Complete</h2>
         
         <div className="grid grid-cols-2 gap-6 mb-8">
-          <div className="bg-[#0F172A] p-6 rounded-md border border-[rgba(255,255,255,0.05)]">
+          <div className="bg-slate-900 p-6 rounded-md border border-[rgba(255,255,255,0.05)]">
             <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-2">Time Elapsed</p>
             <p className="text-4xl font-semibold">{formatTime(elapsedTime)}</p>
           </div>
-          <div className="bg-[#0F172A] p-6 rounded-md border border-[rgba(255,255,255,0.05)]">
+          <div className="bg-slate-900 p-6 rounded-md border border-[rgba(255,255,255,0.05)]">
             <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-2">Focus Score</p>
             <p className="text-4xl font-semibold text-indigo-400">{focusScore}</p>
           </div>
@@ -120,10 +216,91 @@ function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, s
         </div>
 
         <div className="mb-10">
-          <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-4">Activity Logs</p>
-          <div className="bg-black/50 p-4 rounded-md h-48 overflow-y-auto font-mono text-xs text-green-400 border border-[rgba(255,255,255,0.05)]">
-            {logs.length > 0 ? logs.map((log, i) => <div key={i}>{log}</div>) : <div className="text-slate-500">No logs captured.</div>}
+          <div className="flex items-end justify-between gap-4 mb-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)]">Session Activity</p>
+              <p className="text-xs text-slate-400 mt-1">A simple timeline of what Zone detected.</p>
+            </div>
+
+            {activityItems.length > 0 && (
+              <span className="text-[11px] font-medium text-slate-400">
+                {activityItems.length} check{activityItems.length === 1 ? '' : 's'}
+              </span>
+            )}
           </div>
+
+          {activityItems.length > 0 ? (
+            <div className="overflow-hidden rounded-md border border-white/10 bg-slate-900/55">
+              <div className="flex items-center gap-4 border-b border-white/10 px-4 py-2.5 text-[11px] text-slate-400">
+                <span>{focusedChecks} focused</span>
+                <span>{distractedChecks} distracted</span>
+                {ignoredAds > 0 && <span>{ignoredAds} ad{ignoredAds === 1 ? '' : 's'} ignored</span>}
+              </div>
+
+              <div className="max-h-64 overflow-y-auto">
+                {activityItems.map((item, index) => {
+                  const statusClasses = {
+                    focused: 'bg-emerald-400 text-emerald-300',
+                    distracted: 'bg-rose-400 text-rose-300',
+                    ad: 'bg-amber-300 text-amber-200',
+                    neutral: 'bg-slate-400 text-slate-300',
+                  };
+
+                  const statusClass = statusClasses[item.type] || statusClasses.neutral;
+                  const [dotClass, textClass] = statusClass.split(' ');
+
+                  return (
+                    <div
+                      key={item.key}
+                      className={`flex gap-3 px-4 py-3 ${
+                        index === 0 ? '' : 'border-t border-white/[0.07]'
+                      }`}
+                    >
+                      <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-semibold ${textClass}`}>{item.label}</span>
+                          {item.sink && (
+                            <span className="rounded-sm border border-white/10 bg-white/[0.05] px-1.5 py-0.5 text-[10px] font-medium text-slate-300">
+                              {item.sink}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-400">{item.detail}</p>
+                      </div>
+
+                      <div className="shrink-0 text-right">
+                        <p className="text-xs font-medium tabular-nums text-slate-300">
+                          {formatActivityTime(item.elapsed)}
+                        </p>
+                        {item.score !== undefined && (
+                          <p className="mt-0.5 text-[10px] text-slate-500">score {item.score}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-md border border-white/10 bg-slate-900/55 px-4 py-5 text-sm text-slate-400">
+              No activity checks were captured.
+            </div>
+          )}
+
+          {logs.length > 0 && (
+            <details className="mt-3 group">
+              <summary className="w-fit cursor-pointer select-none text-[11px] font-medium text-slate-500 transition-colors hover:text-slate-300">
+                Technical logs
+              </summary>
+              <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-white/[0.08] bg-black/25 p-3 font-mono text-[10px] leading-5 text-slate-500">
+                {logs.map((log, i) => (
+                  <div key={i} className="break-words">{log}</div>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
 
         {error && <p className="text-[#E11D48] mb-4">{error}</p>}
@@ -359,7 +536,15 @@ export default function FocusSession({ onStopFocus }) {
           try {
             const jsonString = line.split('DISTRACTION_LOG:')[1].trim();
             const distraction = JSON.parse(jsonString);
-            setDistractionLogs((prev) => [...prev, distraction]);
+            const normalizedSink =
+              typeof distraction?.sink === 'string' && distraction.sink.trim()
+                ? distraction.sink.trim()
+                : 'n/a';
+
+            setDistractionLogs((prev) => [
+              ...prev,
+              { ...distraction, sink: normalizedSink },
+            ]);
           } catch (err) {
             console.error('Failed to parse distraction log:', err);
           }
@@ -589,7 +774,7 @@ export default function FocusSession({ onStopFocus }) {
     : 0;
 
   return (
-    <div className="fixed inset-0 bg-[#0F172A] text-white flex flex-col z-50 select-none overflow-hidden">
+    <div className="fixed inset-0 bg-slate-900 text-white flex flex-col z-50 select-none overflow-hidden">
       {!isMini && (
         <div className="relative flex items-center justify-between w-full h-[56px] px-[20px] shrink-0 z-10">
           <div className="flex items-center">

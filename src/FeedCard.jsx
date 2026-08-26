@@ -20,6 +20,7 @@ export default function FeedCard({
   onUserClick,
   date,
   title,
+  goal,
   timeElapsed,
   focusScore,
   bgGradient = "radial-gradient(circle 340px at 50% 0%, #eaf3ff 0%, #bcdcff 35%, #7fb8ef 70%, #5a9edd 100%)",
@@ -123,7 +124,18 @@ export default function FeedCard({
               <p className={`text-xs ${mutedColor}`}>{date}</p>
             </div>
           </div>
-          <h2 className="text-[20px] leading-tight font-extrabold mb-6">{title}</h2>
+          <h2 className="text-[20px] leading-tight font-extrabold mb-2">{title}</h2>
+
+          <div className="mb-6 min-w-0 flex items-baseline gap-2">
+            <span className={`text-[10px] uppercase tracking-widest font-semibold leading-tight ${mutedColor} shrink-0`}>Goal:</span>
+            <span
+              className={`text-xs font-normal leading-tight truncate min-w-0 pb-px`}
+              title={goal || ''}
+            >
+              {goal || '—'}
+            </span>
+          </div>
+
           <div className="flex gap-8">
             <div>
               <p className={`text-[10px] uppercase tracking-widest font-semibold ${mutedColor} mb-1`}>Time Elapsed</p>
@@ -171,7 +183,7 @@ export default function FeedCard({
           <div className="relative" ref={quickBarRef}>
             <button 
               onClick={() => setShowQuickBar(!showQuickBar)}
-              className="flex items-center justify-center w-7 h-7 rounded-full border border-[#D0D7DE] bg-white/60 hover:bg-white text-slate-600 transition-all backdrop-blur-md"
+              className="flex items-center justify-center w-7 h-7 rounded-full border border-[#D0D7DE] bg-white/60 hover:bg-white text-slate-600 cursor-pointer transition-all backdrop-blur-md"
               title="Add reaction"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -187,7 +199,7 @@ export default function FeedCard({
                   <button
                     key={emoji}
                     onClick={() => toggleReaction(emoji)}
-                    className="hover:scale-125 transition-transform duration-150 p-1 text-base rounded-full"
+                    className="hover:scale-125 transition-transform cursor-pointer duration-150 p-1 text-base rounded-full"
                   >
                     {emoji}
                   </button>
@@ -199,7 +211,7 @@ export default function FeedCard({
                     setShowQuickBar(false);
                     setShowFullPicker(true);
                   }}
-                  className="w-7 h-7 flex items-center justify-center hover:bg-slate-100 text-slate-500 rounded-full text-xs font-bold transition-colors ml-1"
+                  className="w-7 h-7 flex items-center justify-center cursor-pointer hover:bg-slate-100 text-slate-500 rounded-full text-xs font-bold transition-colors ml-1"
                   title="More emojis"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -215,21 +227,134 @@ export default function FeedCard({
 
       {/* --- Full Emoji Picker Portal Modal --- */}
       {showFullPicker && createPortal(
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 backdrop-blur-[2px] p-4"
           onClick={() => setShowFullPicker(false)}
         >
-          <div 
-            className="relative bg-white rounded-md shadow-sm overflow-hidden"
+          <div
+            className="zone-emoji-picker-shell w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-[#D0D7DE] bg-white shadow-xl"
+            style={{ fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif" }}
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="flex h-12 items-center justify-between border-b border-slate-200 px-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Add reaction</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowFullPicker(false)}
+                className="flex h-7 w-7 items-center cursor-pointer justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                title="Close emoji picker"
+                aria-label="Close emoji picker"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            <style>{`
+              .zone-emoji-picker-shell .EmojiPickerReact {
+                --epr-bg-color: #ffffff;
+                --epr-category-label-bg-color: rgba(255, 255, 255, 0.96);
+                --epr-picker-border-color: transparent;
+                --epr-search-input-bg-color: #f8fafc;
+                --epr-search-input-border-color: #d0d7de;
+                --epr-search-input-text-color: #0f172a;
+                --epr-search-input-placeholder-color: #94a3b8;
+                --epr-text-color: #475569;
+                --epr-hover-bg-color: #f1f5f9;
+                --epr-focus-bg-color: #e2e8f0;
+                --epr-highlight-color: #0f172a;
+                border: 0 !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+                font-family: 'Inter', ui-sans-serif, system-ui, sans-serif !important;
+              }
+
+              .zone-emoji-picker-shell .epr-search-container input,
+              .zone-emoji-picker-shell .epr-emoji-category-label,
+              .zone-emoji-picker-shell .epr-category-nav {
+                font-family: 'Inter', ui-sans-serif, system-ui, sans-serif !important;
+              }
+
+              .zone-emoji-picker-shell .epr-search-container input {
+                border: 1px solid #D0D7DE !important;
+                border-radius: 0.375rem !important;
+                box-shadow: none !important;
+                font-size: 13px !important;
+              }
+
+              .zone-emoji-picker-shell .epr-search-container input:focus {
+                border-color: #94a3b8 !important;
+                outline: none !important;
+              }
+
+              .zone-emoji-picker-shell .epr-category-nav {
+                border-bottom: 1px solid #e2e8f0;
+              }
+
+              .zone-emoji-picker-shell .epr-category-nav button {
+                border-radius: 6px !important;
+              }
+
+              .zone-emoji-picker-shell .epr-emoji-category-label {
+                color: #64748b !important;
+                font-size: 11px !important;
+                font-weight: 600 !important;
+                letter-spacing: 0.02em !important;
+              }
+
+              .zone-emoji-picker-shell .epr-emoji-category-content {
+                padding-left: 4px !important;
+                padding-right: 4px !important;
+              }
+
+              .zone-emoji-picker-shell .epr-emoji-category-content button {
+                border-radius: 6px !important;
+              }
+
+              .zone-emoji-picker-shell .epr-body {
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+              }
+
+              .zone-emoji-picker-shell .epr-body::-webkit-scrollbar {
+                width: 8px;
+              }
+
+              .zone-emoji-picker-shell .epr-body::-webkit-scrollbar-thumb {
+                background: #cbd5e1;
+                border: 2px solid #ffffff;
+                border-radius: 999px;
+              }
+
+              .zone-emoji-picker-shell .epr-body::-webkit-scrollbar-track {
+                background: #ffffff;
+              }
+            `}</style>
+
             <EmojiPicker
               onEmojiClick={(emojiData) => {
                 toggleReaction(emojiData.emoji);
                 setShowFullPicker(false);
               }}
-              width={350}
-              height={400}
+              width="100%"
+              height={390}
+              theme="light"
+              searchPlaceHolder="Search emoji"
               skinTonesDisabled={true}
               previewConfig={{ showPreview: false }}
             />
