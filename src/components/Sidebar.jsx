@@ -32,6 +32,9 @@ export default function Sidebar({ focusModeActive, onStartFocus, onStopFocus, on
           <NavLink to="/" end className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
             Feed
           </NavLink>
+          <NavLink to="/history" className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
+            History
+          </NavLink>
           <NavLink to="/friends" className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md font-medium ${isActive ? "bg-slate-50 text-slate-900" : "text-slate-600 hover:bg-slate-50"}`}>
             Friends
           </NavLink>

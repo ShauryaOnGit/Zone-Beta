@@ -8,6 +8,7 @@ import Friends from './components/Friends';
 import UpcomingEvents from './components/UpcomingEvents';
 import AuthPage from './AuthPage';
 import { Analytics } from './components/Analytics';
+import { History } from './components/History';
 import FocusSession from './components/FocusSession';
 import { supabase } from './lib/supabaseClient';
 
@@ -52,6 +53,7 @@ function Layout({ session, onSignOut }) {
               <Route path="/profile" element={<Profile />} />
               <Route path="/profile/:userId" element={<UserProfile />} />
               <Route path="/friends" element={<Friends />} />
+              <Route path="/history" element={<History session={session} />} />
               <Route path="/analytics" element={<Analytics session={session} />} />
             </Routes>
           </div>

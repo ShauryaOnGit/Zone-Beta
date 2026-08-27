@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
-import { feedCardThemes } from '../feedCardThemes';
 import LowDopamineBreak from './LowDopamineBreak';
 import {
-  computeFairScore,
   computeOptimalSession,
   computeTimeOfDayTrends,
   computeAttentionProgression,
@@ -139,156 +137,6 @@ function TimeOfDayChart({ trends }) {
 }
 
 // ---------------------------------------------------------------------------
-// Accordion Component for Individual Sessions
-// ---------------------------------------------------------------------------
-
-function SessionAccordion({ sessionData, defaultOpen = false, shouldScroll = false }) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-  const containerRef = useRef(null);
-
-  useEffect(() => {
-    if (!defaultOpen) return;
-    setIsOpen(true);
-
-    if (shouldScroll) {
-      requestAnimationFrame(() => {
-        containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
-    }
-  }, [defaultOpen, shouldScroll]);
-
-  const timeline = sessionData.score_timeline || [];
-  const distractionLogs = Array.isArray(sessionData.distracted_logs) ? sessionData.distracted_logs : [];
-  const width = 600;
-  const height = 200;
-  const padding = 40;
-
-  const maxTime = timeline.length > 0
-    ? Math.max(...timeline.map((d) => d.elapsed || d.timestamp || 0), 1)
-    : 1;
-
-  const points = timeline
-    .map((d) => {
-      const t = d.elapsed || d.timestamp || 0;
-      const s = d.score || 0;
-      const x = padding + (t / maxTime) * (width - padding * 2);
-      const y = height - padding - (s / 100) * (height - padding * 2);
-      return `${x},${y}`;
-    })
-    .join(' ');
-
-  const theme = feedCardThemes.find((t) => t.id === sessionData.theme_id) ?? feedCardThemes[0];
-  const fairScore = computeFairScore(timeline) ?? sessionData.focus_score;
-  const coverOpacity = scoreToCoverOpacity(parseFloat(fairScore));
-  const expandedGradient = theme.gradient.replace('circle 340px', 'circle 600px');
-
-  const formatElapsed = (seconds) => {
-    const total = Number(seconds);
-    if (!Number.isFinite(total)) return 'Unknown time';
-    const minutes = Math.floor(total / 60);
-    const secs = Math.floor(total % 60);
-    return `${minutes}:${String(secs).padStart(2, '0')}`;
-  };
-
-  return (
-    <div
-      ref={containerRef}
-      onClick={() => setIsOpen(!isOpen)}
-      className="relative rounded-md text-slate-900 w-full break-inside-avoid border border-[#D0D7DE] overflow-hidden shadow-sm cursor-pointer transition-all hover:border-slate-400"
-      style={{ background: expandedGradient }}
-    >
-      <div
-        className="absolute inset-0 z-0 pointer-events-none transition-opacity duration-700"
-        style={{ background: '#e7edf3', opacity: coverOpacity }}
-      />
-
-      <div className="relative z-10 px-6 py-5 flex justify-between items-center">
-        <div>
-          <h3 className="text-[20px] leading-tight font-extrabold mb-1">{sessionData.task_name || 'Focus Session'}</h3>
-          <p className="text-xs text-slate-600">{new Date(sessionData.created_at).toLocaleString()}</p>
-        </div>
-
-        <div className="flex gap-8 text-left">
-          {sessionData.time_elapsed && (
-            <div>
-              <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-600 mb-1">Time Elapsed</p>
-              <p className="text-lg font-semibold">{sessionData.time_elapsed}</p>
-            </div>
-          )}
-          <div>
-            <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-600 mb-1">Focus Score</p>
-            <p className="text-lg font-semibold">{fairScore}</p>
-          </div>
-        </div>
-      </div>
-
-      {isOpen && (
-        <div
-          className="relative z-10 px-6 pb-6 cursor-default space-y-4"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {timeline.length > 0 ? (
-            <div className="w-full bg-white/60 backdrop-blur-md p-4 rounded-sm border border-slate-200 mt-2">
-              <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-48 overflow-visible">
-                <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="#E2E8F0" strokeDasharray="4" />
-                <line x1={padding} y1={height / 2} x2={width - padding} y2={height / 2} stroke="#E2E8F0" strokeDasharray="4" />
-                <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#CBD5E1" />
-
-                <text x={padding - 10} y={padding} textAnchor="end" alignmentBaseline="middle" className="text-[10px] fill-slate-500 font-semibold">100</text>
-                <text x={padding - 10} y={height / 2} textAnchor="end" alignmentBaseline="middle" className="text-[10px] fill-slate-500 font-semibold">50</text>
-                <text x={padding - 10} y={height - padding} textAnchor="end" alignmentBaseline="middle" className="text-[10px] fill-slate-500 font-semibold">0</text>
-
-                <text x={padding} y={height - padding + 15} textAnchor="middle" alignmentBaseline="hanging" className="text-[10px] fill-slate-500 font-semibold">0</text>
-                <text x={width - padding} y={height - padding + 15} textAnchor="middle" alignmentBaseline="hanging" className="text-[10px] fill-slate-500 font-semibold">{Math.round(maxTime)} sec</text>
-
-                <polyline
-                  fill="none"
-                  stroke="#0F172A"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  points={points}
-                />
-              </svg>
-            </div>
-          ) : (
-            <div className="h-32 flex items-center justify-center border border-dashed border-slate-200 rounded-sm text-slate-500 text-sm bg-white/70 backdrop-blur-md mt-2">
-              No timeline data available for this session.
-            </div>
-          )}
-
-          <div className="bg-white/70 backdrop-blur-md rounded-sm border border-slate-200 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-bold text-slate-900">Distraction Logs</h4>
-              <span className="text-[11px] font-semibold text-slate-500">{distractionLogs.length}</span>
-            </div>
-
-            {distractionLogs.length === 0 ? (
-              <p className="text-sm text-slate-500">No distracted verdicts recorded for this session.</p>
-            ) : (
-              <div className="space-y-2">
-                {distractionLogs.map((log, index) => (
-                  <div key={`${log.occurred_at || log.elapsed_seconds || 'log'}-${index}`} className="rounded-md border border-slate-200 bg-white p-3">
-                    <div className="flex items-center justify-between gap-4 mb-1">
-                      <span className="text-[10px] uppercase tracking-widest font-bold text-rose-600">Distracted</span>
-                      <span className="text-xs text-slate-500">
-                        {formatElapsed(log.elapsed_seconds)} into session
-                        {log.occurred_at ? ` · ${new Date(log.occurred_at).toLocaleTimeString()}` : ''}
-                      </span>
-                    </div>
-                    <p className="text-sm text-slate-700 leading-relaxed">{log.explanation || 'No explanation returned.'}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Locked Pro preview
 // ---------------------------------------------------------------------------
 
@@ -332,107 +180,22 @@ function CheckIcon() {
 }
 
 
-function InsightIcon({ type }) {
-  const common = {
-    xmlns: 'http://www.w3.org/2000/svg',
-    width: 18,
-    height: 18,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 2,
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    'aria-hidden': true,
-  };
-
-  if (type === 'time') {
-    return (
-      <svg {...common}>
-        <circle cx="12" cy="12" r="9" />
-        <path d="M12 7v5l3 2" />
-      </svg>
-    );
-  }
-
-  if (type === 'trend') {
-    return (
-      <svg {...common}>
-        <path d="M4 16l5-5 4 4 7-8" />
-        <path d="M15 7h5v5" />
-      </svg>
-    );
-  }
-
-  if (type === 'recovery') {
-    return (
-      <svg {...common}>
-        <path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" />
-        <path d="M4 4v4h4" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg {...common}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 8v4l2.5 2.5" />
-      <path d="M8 3h8" />
-    </svg>
-  );
-}
-
-function tipPresentation(tip) {
-  const title = (tip?.title || '').toLowerCase();
-
-  if (title.includes('right-size')) {
-    return {
-      type: 'session',
-      eyebrow: 'Session length',
-      accent: 'rgba(90,158,221,0.12)',
-      actionLabel: 'Best move',
-      action: 'Take a short break just before your usual dip.',
-    };
-  }
-
-  if (title.includes('peak')) {
-    return {
-      type: 'time',
-      eyebrow: 'Peak focus window',
-      accent: 'rgba(244,166,74,0.12)',
-      actionLabel: 'Best move',
-      action: 'Protect this window for your hardest work.',
-    };
-  }
-
-  if (title.includes('trending upward')) {
-    return {
-      type: 'trend',
-      eyebrow: 'Momentum',
-      accent: 'rgba(62,168,157,0.12)',
-      actionLabel: 'Keep doing',
-      action: 'Repeat the conditions that made your recent sessions stronger.',
-    };
-  }
-
-  if (title.includes('stretch')) {
-    return {
-      type: 'recovery',
-      eyebrow: 'Recovery signal',
-      accent: 'rgba(143,95,219,0.11)',
-      actionLabel: 'Best move',
-      action: 'Ease the next session slightly, then build back up.',
-    };
-  }
-
-  return {
-    type: 'session',
-    eyebrow: 'Focus pattern',
-    accent: 'rgba(90,158,221,0.10)',
-    actionLabel: 'Next step',
-    action: 'Keep logging sessions so Zone can sharpen this recommendation.',
-  };
-}
+const DOMAIN_SUFFIX_PARTS = new Set([
+  'com',
+  'net',
+  'org',
+  'io',
+  'ai',
+  'app',
+  'dev',
+  'co',
+  'uk',
+  'us',
+  'ca',
+  'au',
+  'edu',
+  'gov',
+]);
 
 function normalizeFocusSink(value) {
   const sink = String(value || '').trim();
@@ -444,6 +207,88 @@ function normalizeFocusSink(value) {
   }
 
   return sink;
+}
+
+function looksLikeSinkDomain(value) {
+  const text = String(value || '').trim();
+  return (
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ||
+    (!/\s/.test(text) && text.includes('.'))
+  );
+}
+
+function canonicalizeFocusSink(value) {
+  const sink = normalizeFocusSink(value);
+  if (!sink) return null;
+
+  const lower = sink.toLowerCase();
+  let tokens = [];
+
+  if (looksLikeSinkDomain(lower)) {
+    try {
+      const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(lower)
+        ? lower
+        : `https://${lower}`;
+
+      const host = new URL(candidate)
+        .hostname
+        .toLowerCase()
+        .replace(/^www\./, '');
+
+      tokens = host
+        .split('.')
+        .flatMap((part) => part.split(/[^a-z0-9]+/))
+        .filter(Boolean);
+
+      // Remove domain infrastructure from the right-hand side.
+      // Repeating this handles suffixes such as .co.uk.
+      while (tokens.length > 1 && DOMAIN_SUFFIX_PARTS.has(tokens[tokens.length - 1])) {
+        tokens.pop();
+      }
+    } catch {
+      tokens = [];
+    }
+  }
+
+  // Plain labels such as "Google Docs" or a malformed domain still get a
+  // deterministic word-based key.
+  if (tokens.length === 0) {
+    tokens = lower
+      .replace(/^www\./, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  // "google" identifies the parent company, not the product, when another
+  // service word exists. This keeps Docs, Drive and Sheets as separate sinks.
+  if (tokens.length > 1 && tokens.includes('google')) {
+    tokens = tokens.filter((token) => token !== 'google');
+  }
+
+  if (tokens.length === 0) return null;
+
+  return {
+    key: tokens.join(''),
+    tokens,
+    raw: sink,
+    isDomain: looksLikeSinkDomain(sink),
+  };
+}
+
+function prettyFocusSinkName(canonical) {
+  if (!canonical) return '';
+
+  // Prefer Qwen's readable app/site label whenever it supplied one.
+  // A domain-only verdict falls back to the meaningful service tokens.
+  if (!canonical.isDomain) {
+    return canonical.raw;
+  }
+
+  return canonical.tokens
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
 }
 
 function computeFocusSinks(sessions) {
@@ -463,37 +308,36 @@ function computeFocusSinks(sessions) {
     if (!Array.isArray(logs)) continue;
 
     for (const log of logs) {
-      const sink = normalizeFocusSink(log?.sink);
-      if (!sink) continue;
+      const canonical = canonicalizeFocusSink(log?.sink);
+      if (!canonical?.key) continue;
 
-      const key = sink.toLowerCase();
-      const existing = counts.get(key);
+      const existing = counts.get(canonical.key);
 
       if (existing) {
         existing.count += 1;
+
+        // If the group started with a raw domain and a later verdict contains
+        // a cleaner human-readable label, use that label for display.
+        if (existing.isDomain && !canonical.isDomain) {
+          existing.name = prettyFocusSinkName(canonical);
+          existing.isDomain = false;
+        }
       } else {
-        counts.set(key, { name: sink, count: 1 });
+        counts.set(canonical.key, {
+          name: prettyFocusSinkName(canonical),
+          count: 1,
+          isDomain: canonical.isDomain,
+        });
       }
     }
   }
 
   return [...counts.values()]
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    .slice(0, 3);
+    .slice(0, 3)
+    .map(({ name, count }) => ({ name, count }));
 }
 
-
-function splitTipBody(body = '') {
-  const parts = body.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((part) => part.trim()).filter(Boolean) || [];
-  if (parts.length <= 1) {
-    return { insight: body, detail: '' };
-  }
-
-  return {
-    insight: parts[0],
-    detail: parts.slice(1).join(' '),
-  };
-}
 
 function LockedAnalyticsPreview() {
   const demoTrends = [
@@ -534,7 +378,6 @@ function LockedAnalyticsPreview() {
 
               <div className="mt-6 flex flex-wrap gap-x-5 gap-y-2.5 text-sm text-slate-700">
                 {[
-                  'Past session summaries',
                   'Distraction explanations',
                   'Personalized session length',
                   'Long-term focus trends',
@@ -565,48 +408,53 @@ function LockedAnalyticsPreview() {
           />
 
           <div className="relative">
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">Personalized Insights</h2>
-              <p className="mt-1 text-sm leading-6 text-slate-500">
-                The easiest steps you can take, based on your current recorded habits, to improve your productivity.
-              </p>
-            </div>
+            <h2 className="text-xl font-semibold text-slate-900">Personalized Insights</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              Specific next steps from your own focus patterns, with the evidence and research basis underneath.
+            </p>
 
             <div className="relative mt-5">
-              <div className="select-none blur-[4px] opacity-65" aria-hidden="true">
+              <div className="divide-y divide-slate-200/80 select-none blur-[4px] opacity-65" aria-hidden="true">
                 {[
                   {
-                    title: 'Right-size your sessions',
-                    hero: '45 min',
-                    action: 'Take a short break just before your usual dip.',
-                    detail: 'Your recent sessions show a repeatable attention drop at a similar point.',
+                    title: 'End your next focus block at 45 minutes',
+                    collapsedDetail: 'Take a 5-minute reset immediately after, before starting another demanding block.',
                   },
                   {
-                    title: 'Protect your peak hours',
-                    hero: '9 AM–12 PM',
-                    action: 'Put your hardest work inside your strongest focus window.',
-                    detail: 'Your recent sessions show a clear difference between stronger and weaker times of day.',
+                    title: 'Reserve 9 AM–12 PM for your hardest work',
+                    collapsedDetail: 'Put your highest-effort task inside this window and move routine work elsewhere.',
                   },
-                ].map((item, index) => (
+                ].map((item) => (
                   <div
                     key={item.title}
-                    className={`${index === 0 ? '' : 'border-t border-slate-200/80'} py-5`}
+                    className="flex items-center justify-between gap-5 py-4"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold text-slate-900">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold text-slate-900">
                         {item.title}
                       </h3>
-                      <span className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500">
-                        {item.hero}
-                      </span>
+                      {item.collapsedDetail && (
+                        <p className="mt-1 text-sm leading-6 text-slate-500">
+                          {item.collapsedDetail}
+                        </p>
+                      )}
                     </div>
 
-                    <p className="mt-3 text-sm leading-6 text-slate-600">
-                      {item.action}
-                    </p>
-                    <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500">
-                      {item.detail}
-                    </p>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="shrink-0 text-slate-400"
+                      aria-hidden="true"
+                    >
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
                   </div>
                 ))}
               </div>
@@ -739,49 +587,6 @@ function LockedAnalyticsPreview() {
           </div>
         </section>
 
-        <section>
-          <div className="flex items-end justify-between gap-4 mb-4">
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">Session Summaries</h2>
-              <p className="text-sm text-slate-500 mt-1">Open any session to inspect its attention timeline and distraction log.</p>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            {[
-              { title: 'Deep work session', time: '48:12', score: '91', gradient: 'linear-gradient(120deg, #d9eafb 0%, #eef5ff 50%, #b8dbf8 100%)' },
-              { title: 'Revision block', time: '36:40', score: '84', gradient: 'linear-gradient(120deg, #ffd8c6 0%, #fff0e9 52%, #ffb28f 100%)' },
-            ].map((item) => (
-              <div
-                key={item.title}
-                className="relative overflow-hidden rounded-md border border-[#D0D7DE] shadow-sm"
-                style={{ background: item.gradient }}
-              >
-                <div className="px-6 py-5 flex justify-between items-center gap-6 opacity-70 blur-[4px] select-none" aria-hidden="true">
-                  <div>
-                    <h3 className="text-[20px] leading-tight font-extrabold text-slate-900 mb-1">{item.title}</h3>
-                    <p className="text-xs text-slate-600">Sample session</p>
-                  </div>
-                  <div className="flex gap-8 text-left">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-600 mb-1">Time Elapsed</p>
-                      <p className="text-lg font-semibold text-slate-900">{item.time}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-600 mb-1">Focus Score</p>
-                      <p className="text-lg font-semibold text-slate-900">{item.score}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="absolute inset-0 flex items-center justify-center bg-white/5 backdrop-blur-[1px] pointer-events-none">
-                  <div className="rounded-md border border-white/80 bg-white/92 shadow-sm px-3 py-1.5 text-xs font-semibold text-slate-600 flex items-center gap-2">
-                    <LockIcon size={13} /> Unlock past session details
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
 
         <section className="rounded-md border border-slate-200 bg-slate-900 text-white px-6 py-6 shadow-sm">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
@@ -806,6 +611,7 @@ function LockedAnalyticsPreview() {
 
 export function Analytics({ session }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const targetPostId = location.state?.targetPostId ?? null;
   const shouldOpenTarget = Boolean(location.state?.openSessionSummary && targetPostId);
   const [isPro, setIsPro] = useState(false);
@@ -814,8 +620,34 @@ export function Analytics({ session }) {
   const [breakActive, setBreakActive] = useState(false);
   const [optimalBreaksEnabled, setOptimalBreaksEnabled] = useState(false);
   const [optimalBreaksSaving, setOptimalBreaksSaving] = useState(false);
+  const [expandedInsightKeys, setExpandedInsightKeys] = useState(() => new Set());
   const breakLengthRef = useRef(5);
 
+  // Existing Feed/Profile summary links used to point at Analytics.
+  // Redirect those deep links into the new free History page.
+  useEffect(() => {
+    if (!shouldOpenTarget) return;
+
+    navigate('/history', {
+      replace: true,
+      state: { targetPostId, openSessionSummary: true },
+    });
+  }, [navigate, shouldOpenTarget, targetPostId]);
+
+
+  const toggleInsight = (key) => {
+    setExpandedInsightKeys((current) => {
+      const next = new Set(current);
+
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+
+      return next;
+    });
+  };
 
   const handleOptimalBreaksToggle = async () => {
     if (
@@ -880,26 +712,7 @@ export function Analytics({ session }) {
         return;
       }
 
-      let resolvedPosts = posts || [];
-
-      if (targetPostId && !resolvedPosts.some((post) => String(post.id) === String(targetPostId))) {
-        const { data: targetPost, error: targetError } = await supabase
-          .from('feed_posts')
-          .select('id, task_name, focus_score, time_elapsed, score_timeline, created_at, theme_id, distracted_logs')
-          .eq('user_id', session.user.id)
-          .eq('id', targetPostId)
-          .maybeSingle();
-
-        if (targetError) {
-          console.error('Failed to load requested analytics session:', targetError);
-        } else if (targetPost) {
-          resolvedPosts = [...resolvedPosts, targetPost];
-        }
-      }
-
-      // Keep every session in strict chronological order. The deep-linked
-      // target is never promoted; it is only used later for open + scroll.
-      resolvedPosts = [...resolvedPosts].sort(
+      const resolvedPosts = [...(posts || [])].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
 
@@ -908,7 +721,7 @@ export function Analytics({ session }) {
     };
 
     fetchAnalytics();
-  }, [session, targetPostId]);
+  }, [session]);
 
   const optimalSession = useMemo(() => computeOptimalSession(sessionsData), [sessionsData]);
   const timeOfDayTrends = useMemo(() => computeTimeOfDayTrends(sessionsData), [sessionsData]);
@@ -918,6 +731,10 @@ export function Analytics({ session }) {
     () => generateTips({ optimalSession, timeOfDayTrends, sessions: sessionsData }),
     [optimalSession, timeOfDayTrends, sessionsData]
   );
+
+  if (shouldOpenTarget) {
+    return null;
+  }
 
   if (loading) {
     return (
@@ -940,11 +757,6 @@ export function Analytics({ session }) {
       />
     );
   }
-
-  // Render summaries in the exact chronological order held in sessionsData.
-  // targetPostId must NEVER participate in ordering; it only controls which
-  // existing accordion opens and gets scrolled into view.
-  const summarySessions = sessionsData;
 
   return (
     <div className="mb-8">
@@ -970,55 +782,86 @@ export function Analytics({ session }) {
             />
 
             <div className="relative">
-              <div>
-                <h2 className="text-xl font-semibold text-slate-900">Personalized Insights</h2>
-                <p className="mt-1 text-sm leading-6 text-slate-500">
-                  The easiest steps you can take, based on your current recorded habits, to improve your productivity.
-                </p>
-              </div>
+              <h2 className="text-xl font-semibold text-slate-900">Personalized Insights</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                Specific next steps from your own focus patterns, with the evidence and research basis underneath.
+              </p>
 
-              <div className="mt-5">
+              <div className="mt-5 divide-y divide-slate-200/80">
                 {tips.map((tip, i) => {
-                  const presentation = tipPresentation(tip);
-                  const copy = splitTipBody(tip.body);
-
-                  let hero = null;
-                  if (tip.title === 'Right-size your sessions' && optimalSession.hasEnoughData) {
-                    hero = `${optimalSession.recommendedMinutes} min`;
-                  } else if (tip.title === 'Protect your peak hours' && timeOfDayTrends.length > 0) {
-                    hero = timeOfDayTrends[0].range;
-                  } else if (tip.title === 'Trending upward') {
-                    hero = 'Improving';
-                  } else if (tip.title === 'Stretch, don’t strain') {
-                    hero = 'Recent dip';
-                  }
+                  const insightKey = String(tip.id || tip.title || i);
+                  const isExpanded = expandedInsightKeys.has(insightKey);
+                  const showActionWhenCollapsed = Boolean(tip.action);
 
                   return (
-                    <article
-                      key={`${tip.title}-${i}`}
-                      className={`${i === 0 ? '' : 'border-t border-slate-200/80'} py-5`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <h3 className="text-sm font-semibold text-slate-900">
-                          {tip.title}
-                        </h3>
+                    <article key={insightKey}>
+                      <button
+                        type="button"
+                        onClick={() => toggleInsight(insightKey)}
+                        aria-expanded={isExpanded}
+                        className="w-full flex items-center justify-between gap-5 py-4 text-left cursor-pointer"
+                      >
+                        <div className="min-w-0">
+                          <h3 className="text-base font-semibold text-slate-900">
+                            {tip.title}
+                          </h3>
 
-                        {hero && (
-                          <span className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500">
-                            {hero}
-                          </span>
-                        )}
-                      </div>
+                          {showActionWhenCollapsed && tip.action && (
+                            <p className="mt-1 text-sm leading-6 text-slate-500">
+                              {tip.action}
+                            </p>
+                          )}
+                        </div>
 
-                      <p className="mt-3 text-sm leading-6 text-slate-600">
-                        {presentation.action}
-                      </p>
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className={`shrink-0 text-slate-400 transition-transform duration-200 ${
+                            isExpanded ? 'rotate-180' : ''
+                          }`}
+                          aria-hidden="true"
+                        >
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      </button>
 
-                      {(copy.insight || copy.detail) && (
-                        <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500">
-                          {copy.insight}
-                          {copy.detail ? ` ${copy.detail}` : ''}
-                        </p>
+                      {isExpanded && (
+                        <div className="pb-5 pr-8">
+                          {tip.action && !showActionWhenCollapsed && (
+                            <p className="text-sm font-medium leading-6 text-slate-700">
+                              {tip.action}
+                            </p>
+                          )}
+
+                          {tip.evidence && (
+                            <p className="mt-1.5 max-w-3xl text-sm leading-6 text-slate-500">
+                              {tip.evidence}
+                            </p>
+                          )}
+
+                          {tip.research && (
+                            <p className="mt-3 max-w-3xl text-xs leading-5 text-slate-400">
+                              <span className="font-semibold text-slate-500">
+                                {tip.basisLabel || 'Research basis'}:
+                              </span>{' '}
+                              {tip.research.source}
+                              {tip.research.finding ? ` — ${tip.research.finding}` : ''}
+                            </p>
+                          )}
+
+                          {tip.context && (
+                            <p className="mt-3 text-[11px] font-medium text-slate-400">
+                              {tip.context}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </article>
                   );
@@ -1196,31 +1039,6 @@ export function Analytics({ session }) {
             </div>
           </section>
 
-          {/* Session Summaries */}
-          <section>
-            <div className="flex items-end justify-between gap-4 mb-4">
-              <div>
-                <h2 className="text-xl font-semibold text-slate-900">Session Summaries</h2>
-                <p className="text-sm text-slate-500 mt-1">
-                  Open any session to inspect its attention timeline and distraction log.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {summarySessions.map((sessionData) => {
-                const isTarget = String(sessionData.id) === String(targetPostId);
-                return (
-                  <SessionAccordion
-                    key={sessionData.id}
-                    sessionData={sessionData}
-                    defaultOpen={shouldOpenTarget && isTarget}
-                    shouldScroll={shouldOpenTarget && isTarget}
-                  />
-                );
-              })}
-            </div>
-          </section>
         </div>
       )}
     </div>

@@ -545,7 +545,7 @@ export default function Feed() {
   };
 
   const handleOpenSummary = (rawId) => {
-    navigate('/analytics', {
+    navigate('/history', {
       state: { targetPostId: rawId, openSessionSummary: true },
     });
   };

@@ -342,7 +342,7 @@ export default function Profile() {
 
       const { data, error: profileError } = await supabase
         .from('profiles')
-        .select('username, created_at, avatar_url')
+        .select('username, created_at, avatar_url, is_pro')
         .eq('user_id', session.user.id)
         .single();
 
@@ -499,7 +499,7 @@ export default function Profile() {
   };
 
   const handleOpenSummary = (rawId) => {
-    navigate('/analytics', {
+    navigate('/history', {
       state: { targetPostId: rawId, openSessionSummary: true },
     });
   };
@@ -639,27 +639,43 @@ export default function Profile() {
           </div>
 
           <div className="shrink-0 grid grid-cols-2 gap-x-8 md:gap-x-10">
-            <div className="text-center min-w-[140px]">
-              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+            <div className="text-center min-w-[140px] flex flex-col items-center">
+              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500">
                 Avg Session Length
               </p>
-              <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
-                {postsLoading
-                  ? '—'
-                  : formatAverageSessionLength(averageSessionLengthSeconds)}
-              </p>
+              <div className="mt-2 h-[58px] flex items-center justify-center overflow-visible">
+                <p className="text-5xl font-black tracking-tight text-slate-900 leading-[1.08] pb-[2px]">
+                  {postsLoading
+                    ? '—'
+                    : formatAverageSessionLength(averageSessionLengthSeconds)}
+                </p>
+              </div>
+              <div className="mt-2 min-h-[15px]" aria-hidden="true" />
             </div>
-            <div className="text-center min-w-[140px]">
-              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+            <div className="text-center min-w-[140px] flex flex-col items-center">
+              <p className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500">
                 Avg Focus Score
               </p>
-              <p className="text-5xl font-black tracking-tight text-slate-900 leading-none">
-                {postsLoading
-                  ? '—'
-                  : averageFocusScore !== null
-                  ? averageFocusScore
-                  : '—'}
-              </p>
+              <div className="mt-2 h-[58px] flex items-center justify-center overflow-visible">
+                <p className="text-5xl font-black tracking-tight text-slate-900 leading-[1.08] pb-[2px]">
+                  {postsLoading
+                    ? '—'
+                    : averageFocusScore !== null
+                    ? averageFocusScore
+                    : '—'}
+                </p>
+              </div>
+              <div className="mt-2 min-h-[15px] flex items-start justify-center">
+                {!postsLoading && profile?.is_pro && averageFocusScore !== null && averageFocusScore > 80 && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/analytics')}
+                    className="text-[10px] font-medium tracking-[0.03em] text-slate-400 leading-[15px] hover:text-slate-600 hover:underline underline-offset-2 transition-colors cursor-pointer"
+                  >
+                    uses Zone Pro
+                  </button>
+                )}
+              </div>
             </div>
 
             
