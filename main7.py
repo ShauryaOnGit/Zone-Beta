@@ -121,7 +121,7 @@ def call_vlm(image: Image.Image, prompt: str, model: str = "qwen3-vl:4b") -> str
     try:
         response = ollama.chat(
             model=model,
-            options={"num_ctx": 4096, "temperature": 0},
+            options={"num_ctx": 6144, "temperature": 0},
             messages=[
                 {
                     "role": "user",
@@ -247,15 +247,8 @@ def parse_vlm_response(answer_text: str):
 
 
 def make_retry_prompt(original_prompt: str) -> str:
-    return (
-        original_prompt
-        + "\n\nIMPORTANT: Your previous response did not contain a recognizable STATUS. "
-        "Return these four labeled lines and nothing else:\n"
-        "STATUS: ON_TASK or STATUS: DISTRACTED or STATUS: AD\n"
-        "CONFIDENCE: <integer from 0 to 100>\n"
-        "REASON: <one short, specific sentence>\n"
-        "SINK: <one app/website token, or n/a>"
-    )
+    # Keep the retry tiny too: the screenshot itself consumes most of the VLM context.
+    return original_prompt + "\nReply with only the two requested lines. STATUS must be ON_TASK, DISTRACTED, or AD."
 
 
 def make_fallback_result(answer_text: str):
@@ -398,22 +391,21 @@ def run_screen_capture_loop(task):
     gate = PixelHashGate(cache_size=50, phash_size=8, phash_threshold=6, default_max_hits=3)
 
     prompt = (
-        f"The user is supposed to be doing {task}. "
-        "Judge only what is visible in the screenshot. "
-        "If clear YouTube ad UI is visible — such as 'Sponsored' with an advertiser/domain, "
-        "'Skip' or 'Skip ad', an advertiser CTA (Subscribe, Book now, Shop, Learn more), "
-        "or an ad counter such as '2 of 2' — use STATUS: AD. "
-        "Otherwise judge whether the visible activity matches the user's task. "
-        "Do not label normal branded or promotional content as AD unless YouTube ad UI is visible. "
-        "When STATUS is DISTRACTED, identify the visible distracting website/app using exactly one token "
-        "(examples: YouTube, Reddit, Discord, Spotify, GoogleDocs, VSCode). "
-        "If you cannot confidently identify the website/app, use n/a. "
-        "For ON_TASK or AD, use n/a.\n"
-        "Respond with exactly four labeled lines:\n"
-        "STATUS: ON_TASK or STATUS: DISTRACTED or STATUS: AD\n"
-        "CONFIDENCE: <integer 0-100>\n"
-        "REASON: <one short, specific sentence explaining what visible content supports the status>\n"
-        "SINK: <one app/website token, or n/a>"
+        f"Task: {task}\n\n"
+        "Classify the screenshot. Ignore the Zone overlay.\n\n"
+        "ON_TASK = matches or could reasonably support the task.\n"
+        "DISTRACTED = clearly unrelated.\n"
+        "AD = clear YouTube ad.\n\n"
+        "LLM chats, Google Search, email, browsers, etc. are not distractions by default. "
+        "Judge the visible content. If relevance is unclear but plausible, use ON_TASK.\n\n"
+        "For YouTube, AD markers include Sponsored, advertiser/domain, Skip/Skip ad, "
+        "ad countdown, or advertiser CTA.\n\n"
+        "SINK = the distracting app/site, only when DISTRACTED. "
+        "Use a short name like YouTube, Reddit, ChatGPT, Gmail, Discord. "
+        "If unclear, use n/a. ON_TASK or AD = n/a.\n\n"
+        "Reply exactly:\n"
+        "STATUS: ON_TASK|DISTRACTED|AD\n"
+        "SINK: name|n/a"
     )
 
     focused_count = 0
@@ -552,6 +544,16 @@ def run_screen_capture_loop(task):
                 }
                 print(f"TELEMETRY: {json.dumps(telemetry_data)}")
                 sys.stdout.flush()
+
+                if status == "ON_TASK":
+                    print(f"\n[{time.strftime('%X')}] {source}: ON_TASK (confidence: {confidence}%)")
+                    print(
+                        f"STATUS: {result['status']}\n"
+                        f"CONFIDENCE: {result['confidence']}\n"
+                        f"REASON: {result['reason']}\n"
+                        f"SINK: n/a"
+                    )
+                    sys.stdout.flush()
 
                 if distracted:
                     distraction_data = {
