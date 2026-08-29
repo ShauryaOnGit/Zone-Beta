@@ -1,23 +1,17 @@
 """
-Pixel/Hash Gate — a lightweight pre-filter that sits in front of an
-expensive vision-language model (VLM) call. It decides whether an
-incoming frame/image is different enough from what's already been seen
-to be worth re-processing, or whether a cached result can be reused.
+Pixel/Hash Gate — a lightweight pre-filter in front of the VLM.
 
-Two tiers, checked in order (cheapest first):
-  1. Exact-hash gate  -> catches byte-identical duplicate images (O(1))
-  2. Perceptual gate  -> catches near-identical images using a
-                         difference hash (dHash) + Hamming distance
+This Windows-tuned version:
+  - checks the screen frequently
+  - uses qwen3-vl:4b-instruct-q4_K_M first
+  - downscales screenshots to a 1500px max edge for the VLM
+  - automatically switches to qwen3-vl:2b-instruct-q4_K_M for the rest
+    of the session if a 4B inference takes more than 50 seconds
 
-Cached verdicts use a fixed hit budget instead of a model-reported score.
-
-The capture loop checks the screen on a short cadence:
-  - normally every 5 seconds
-  - every 3 seconds while distracted
-
-Those are target intervals, not extra delays. If a VLM call itself takes
-longer than the target interval, the next screenshot is captured as soon
-as the previous verdict returns.
+The VLM returns:
+  STATUS: ON_TASK | DISTRACTED | AD
+  SINK: short app/site name or n/a
+  REASON: one short sentence describing what visible content drove the verdict
 """
 
 import atexit
@@ -34,6 +28,12 @@ from collections import OrderedDict
 import numpy as np
 import ollama
 from PIL import Image, ImageGrab
+
+PRIMARY_VLM_MODEL = "qwen3-vl:4b-instruct-q4_K_M"
+FALLBACK_VLM_MODEL = "qwen3-vl:2b-instruct-q4_K_M"
+FOUR_B_MAX_SECONDS = 50.0
+CURRENT_VLM_MODEL = PRIMARY_VLM_MODEL
+
 
 
 class PixelHashGate:
@@ -100,7 +100,7 @@ class PixelHashGate:
             self._perceptual_cache.popitem(last=False)
 
 
-VLM_MAX_EDGE = 1600
+VLM_MAX_EDGE = 1500
 
 
 def prepare_vlm_image(image: Image.Image) -> Image.Image:
@@ -116,16 +116,27 @@ def prepare_vlm_image(image: Image.Image) -> Image.Image:
     return image.resize(resized, Image.Resampling.LANCZOS)
 
 
-def call_vlm(image: Image.Image, prompt: str, model: str = "qwen3-vl:4b") -> str:
+def call_vlm(image: Image.Image, prompt: str, model: str = None):
+    global CURRENT_VLM_MODEL
+
+    chosen_model = model or CURRENT_VLM_MODEL
+
     buffer = io.BytesIO()
     vlm_image = prepare_vlm_image(image)
     vlm_image.save(buffer, format="PNG")
     image_bytes = buffer.getvalue()
 
+    started = time.perf_counter()
     try:
         response = ollama.chat(
-            model=model,
-            options={"num_ctx": 6144, "temperature": 0},
+            model=chosen_model,
+            think=False,
+            keep_alive="30m",
+            options={
+                "num_ctx": 2048,
+                "num_predict": 80,
+                "temperature": 0,
+            },
             messages=[
                 {
                     "role": "user",
@@ -137,8 +148,21 @@ def call_vlm(image: Image.Image, prompt: str, model: str = "qwen3-vl:4b") -> str
     except Exception as exc:
         raise RuntimeError(f"Ollama call failed: {exc}") from exc
 
-    return response["message"]["content"]
+    elapsed = time.perf_counter() - started
 
+    if chosen_model == PRIMARY_VLM_MODEL and elapsed > FOUR_B_MAX_SECONDS:
+        CURRENT_VLM_MODEL = FALLBACK_VLM_MODEL
+        print(
+            f"MODEL_FALLBACK: {PRIMARY_VLM_MODEL} took {elapsed:.1f}s; "
+            f"switching to {FALLBACK_VLM_MODEL} for the rest of this session."
+        )
+        sys.stdout.flush()
+
+    return {
+        "text": response["message"]["content"],
+        "model": chosen_model,
+        "elapsed": elapsed,
+    }
 
 def normalize_sink(value: str) -> str:
     """Return one safe app/site token, or n/a when the model is unsure/malformed."""
@@ -162,7 +186,7 @@ def normalize_sink(value: str) -> str:
 
 
 def parse_vlm_response(answer_text: str):
-    """Tolerantly parse STATUS and optional SINK from the VLM response."""
+    """Tolerantly parse STATUS, optional SINK, and optional one-sentence REASON from the VLM response."""
     if not isinstance(answer_text, str) or not answer_text.strip():
         return None
 
@@ -209,11 +233,11 @@ def parse_vlm_response(answer_text: str):
 
     if reason is None:
         if status == "DISTRACTED":
-            reason = "The visible activity does not match the user's stated focus goal."
+            reason = "Visible content appears unrelated to the stated task, but the model did not provide a more specific explanation."
         elif status == "AD":
-            reason = "Clear YouTube advertisement UI is visible."
+            reason = "Visible YouTube ad markers indicate an advertisement."
         else:
-            reason = "The visible activity appears consistent with the user's stated focus goal."
+            reason = "Visible content appears relevant to the stated task, but the model did not provide a more specific explanation."
 
     if status != "DISTRACTED": sink = "n/a"
     return {"status": status, "reason": reason, "sink": sink, "raw": answer_text}
@@ -221,7 +245,7 @@ def parse_vlm_response(answer_text: str):
 
 def make_retry_prompt(original_prompt: str) -> str:
     # Keep the retry tiny too: the screenshot itself consumes most of the VLM context.
-    return original_prompt + "\nReply with only the two requested lines. STATUS must be ON_TASK, DISTRACTED, or AD."
+    return original_prompt + "\nReply with only the three requested lines. STATUS must be ON_TASK, DISTRACTED, or AD."
 
 
 def make_fallback_result(answer_text: str):
@@ -263,12 +287,15 @@ def analyze_frame(
     if not should_process:
         cached_result = parse_vlm_response(cached)
         if cached_result is not None:
+            cached_result["vlm_calls"] = 0
+            cached_result["vlm_inference_total_seconds"] = 0.0
             return cached_result, "CACHE HIT (HashGate)"
 
         print("HashGate contained malformed VLM output; bypassing cache.")
         sys.stdout.flush()
 
-    first_answer = call_vlm(image, prompt)
+    first_call = call_vlm(image, prompt)
+    first_answer = first_call["text"]
     parsed = parse_vlm_response(first_answer)
 
     # Only retry when STATUS itself is missing/unrecognizable. Missing optional
@@ -277,18 +304,34 @@ def analyze_frame(
         print("VLM response had no recognizable status; retrying once with stricter formatting.")
         sys.stdout.flush()
 
-        retry_answer = call_vlm(image, make_retry_prompt(prompt))
+        retry_call = call_vlm(image, make_retry_prompt(prompt), model=first_call["model"])
+        retry_answer = retry_call["text"]
         parsed = parse_vlm_response(retry_answer)
 
         if parsed is None:
             print("VLM retry still had no recognizable status; using a neutral non-cached fallback.")
             sys.stdout.flush()
-            return make_fallback_result(retry_answer or first_answer), "VLM CALL (Ollama, neutral fallback)"
+            fallback = make_fallback_result(retry_answer or first_answer)
+            fallback["model"] = retry_call["model"]
+            fallback["inference_seconds"] = retry_call["elapsed"]
+            fallback["vlm_calls"] = 2
+            fallback["vlm_inference_total_seconds"] = first_call["elapsed"] + retry_call["elapsed"]
+            return fallback, "VLM CALL (Ollama, neutral fallback)"
 
+        parsed["model"] = retry_call["model"]
+        parsed["inference_seconds"] = retry_call["elapsed"]
+        parsed["vlm_calls"] = 2
+        parsed["vlm_inference_total_seconds"] = first_call["elapsed"] + retry_call["elapsed"]
+        gate.store(image, prompt, parsed["raw"])
+        return parsed, "VLM CALL (Ollama)"
+
+    parsed["model"] = first_call["model"]
+    parsed["inference_seconds"] = first_call["elapsed"]
+    parsed["vlm_calls"] = 1
+    parsed["vlm_inference_total_seconds"] = first_call["elapsed"]
     gate.store(image, prompt, parsed["raw"])
 
     return parsed, "VLM CALL (Ollama)"
-
 
 def parse_status(result) -> str:
     """Return STATUS for parsed-result dicts or raw strings."""
@@ -325,6 +368,8 @@ def parse_sink(result) -> str:
 
 def run_screen_capture_loop(task):
     print("Starting live screen tracker...")
+    print(f"PRIMARY_MODEL: {PRIMARY_VLM_MODEL}")
+    sys.stdout.flush()
     session_start_time = time.perf_counter()
 
     gate = PixelHashGate(cache_size=50, phash_size=8, phash_threshold=6, default_max_hits=4)
@@ -342,13 +387,22 @@ def run_screen_capture_loop(task):
         "SINK = the distracting app/site, only when DISTRACTED. "
         "Use a short name like YouTube, Reddit, ChatGPT, Gmail, Discord. "
         "If unclear, use n/a. ON_TASK or AD = n/a.\n\n"
+        "REASON = one short sentence stating what visible content led to the verdict. "
+        "Be specific and mention the visible app, page, document, code editor, video topic, or ad marker.\n\n"
         "Reply exactly:\n"
         "STATUS: ON_TASK|DISTRACTED|AD\n"
-        "SINK: name|n/a"
+        "SINK: name|n/a\n"
+        "REASON: one sentence"
     )
 
     focused_count = 0
     total_count = 0
+
+    check_count = 0
+    vlm_call_count = 0
+    cache_hit_count = 0
+    vlm_inference_total_seconds = 0.0
+
     stop_requested = threading.Event()
     pause_requested = threading.Event()
 
@@ -358,7 +412,18 @@ def run_screen_capture_loop(task):
         return 0
 
     def print_final_summary():
+        avg_vlm_time = (
+            vlm_inference_total_seconds / vlm_call_count
+            if vlm_call_count
+            else 0.0
+        )
+
         print(f"FINAL_SCORE: {compute_final_score()}")
+        print(f"CHECKS: {check_count}")
+        print(f"VLM_CALLS: {vlm_call_count}")
+        print(f"CACHE_HITS: {cache_hit_count}")
+        print(f"AVG_VLM_TIME: {avg_vlm_time:.1f}s")
+        print(f"MODEL: {CURRENT_VLM_MODEL}")
         sys.stdout.flush()
 
     atexit.register(print_final_summary)
@@ -411,6 +476,17 @@ def run_screen_capture_loop(task):
             t0 = time.perf_counter()
             result, source = analyze_frame(frame, prompt=prompt, gate=gate)
             elapsed = time.perf_counter() - t0
+
+            check_count += 1
+
+            if source.startswith("CACHE HIT"):
+                cache_hit_count += 1
+
+            if isinstance(result, dict):
+                vlm_call_count += int(result.get("vlm_calls", 0) or 0)
+                vlm_inference_total_seconds += float(
+                    result.get("vlm_inference_total_seconds", 0.0) or 0.0
+                )
 
             # If PAUSE arrived while Ollama was already processing a frame,
             # discard the in-flight result.
@@ -509,10 +585,18 @@ def run_screen_capture_loop(task):
             target_interval = DISTRACTED_CHECK_INTERVAL if distracted else NORMAL_CHECK_INTERVAL
             sleep_time = max(0.0, target_interval - processing_time)
 
+            model_used = result.get("model", "unknown") if isinstance(result, dict) else "unknown"
+            inference_seconds = result.get("inference_seconds") if isinstance(result, dict) else None
+            inference_part = (
+                f" inference={inference_seconds:.1f}s"
+                if isinstance(inference_seconds, (int, float))
+                else ""
+            )
             print(
-                f"CHECK_TIMING: source={source} "
-                f"processing={processing_time:.1f}s "
-                f"next_sleep={sleep_time:.1f}s"
+                f"CHECK_TIMING: source={source} model={model_used}"
+                f"{inference_part} processing={processing_time:.1f}s "
+                f"next_sleep={sleep_time:.1f}s "
+                f"checks={check_count} vlm_calls={vlm_call_count} cache_hits={cache_hit_count}"
             )
             sys.stdout.flush()
 
