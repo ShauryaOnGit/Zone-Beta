@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Feed from './components/Feed';
 import Profile from './components/Profile';
@@ -8,13 +8,15 @@ import Friends from './components/Friends';
 import UpcomingEvents from './components/UpcomingEvents';
 import AuthPage from './AuthPage';
 import { Analytics } from './components/Analytics';
+import * as GroupsModule from './components/Groups';
+import GroupDetail from './components/GroupDetail';
 import { History } from './components/History';
 import FocusSession from './components/FocusSession';
 import { supabase } from './lib/supabaseClient';
 
+const Groups = GroupsModule.default ?? GroupsModule.Groups;
+
 function Layout({ session, onSignOut }) {
-  const location = useLocation();
-  const showSidebar = location.pathname !== '/groups';
   const [focusModeActive, setFocusModeActive] = useState(false);
 
   const handleStartFocus = () => {
@@ -41,11 +43,7 @@ function Layout({ session, onSignOut }) {
       />
       <main className="flex-1 overflow-y-auto p-10">
         <div
-          className={`grid max-w-7xl mx-auto gap-10 items-start ${
-            showSidebar
-              ? 'grid-cols-1 xl:grid-cols-[minmax(0,1fr)_18rem]'
-              : 'grid-cols-1'
-          }`}
+          className="grid max-w-7xl mx-auto gap-10 items-start grid-cols-1 xl:grid-cols-[minmax(0,1fr)_18rem]"
         >
           <div className="min-w-0">
             <Routes>
@@ -55,14 +53,14 @@ function Layout({ session, onSignOut }) {
               <Route path="/friends" element={<Friends />} />
               <Route path="/history" element={<History session={session} />} />
               <Route path="/analytics" element={<Analytics session={session} />} />
+              <Route path="/groups" element={<Groups session={session} />} />
+              <Route path="/groups/:groupId" element={<GroupDetail session={session} />} />
             </Routes>
           </div>
 
-          {showSidebar && (
-            <div className="hidden xl:block pt-2">
-              <UpcomingEvents />
-            </div>
-          )}
+          <div className="hidden xl:block pt-2">
+            <UpcomingEvents />
+          </div>
         </div>
       </main>
     </div>

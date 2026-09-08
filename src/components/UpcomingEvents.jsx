@@ -1,6 +1,7 @@
 // src/components/UpcomingEvents.jsx
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import ConfirmModal from './ConfirmModal';
 
 export default function UpcomingEvents() {
   const [userId, setUserId] = useState(null);
@@ -11,6 +12,7 @@ export default function UpcomingEvents() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -81,6 +83,11 @@ export default function UpcomingEvents() {
   };
 
   const handleDelete = async (id) => {
+    if (!id || isDeleting) return;
+
+    setIsDeleting(true);
+    setError('');
+
     try {
       const { error: deleteError } = await supabase
         .from('upcoming_events')
@@ -94,7 +101,9 @@ export default function UpcomingEvents() {
       setConfirmingDeleteId(null);
     } catch (err) {
       console.error('Failed to delete event:', err);
-      alert('Could not delete. Please try again.');
+      setError('Could not delete. Please try again.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -181,29 +190,6 @@ export default function UpcomingEvents() {
             {new Date(ev.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
           </p>
 
-          {confirmingDeleteId === ev.id ? (
-            <div className="absolute top-2 right-2 flex items-center gap-1 bg-slate-900/95 rounded-md px-1.5 py-1 shadow-md">
-              <p>Delete Task?</p>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDelete(ev.id);
-                }}
-                className="text-[10px] text-white bg-rose-600 hover:bg-rose-500 rounded px-1.5 py-0.5 cursor-pointer"
-              >
-                Yes
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmingDeleteId(null);
-                }}
-                className="text-[10px] text-white bg-slate-700 hover:bg-slate-600 rounded px-1.5 py-0.5 cursor-pointer"
-              >
-                No
-              </button>
-            </div>
-          ) : (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -227,9 +213,24 @@ export default function UpcomingEvents() {
                           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                         </svg>
             </button>
-          )}
         </div>
       ))}
+
+      {confirmingDeleteId && (
+        <ConfirmModal
+          title="Delete pinned task?"
+          description="This pinned task will be permanently removed."
+          confirmLabel="Delete task"
+          busyLabel="Deleting..."
+          busy={isDeleting}
+          error={error}
+          onConfirm={() => handleDelete(confirmingDeleteId)}
+          onCancel={() => {
+            setConfirmingDeleteId(null);
+            setError('');
+          }}
+        />
+      )}
     </div>
   );
 }

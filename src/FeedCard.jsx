@@ -10,6 +10,13 @@ function scoreToCoverOpacity(score) {
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
+function withAnimatedGlowRadius(gradient) {
+  return String(gradient || '').replace(
+    /circle\s+340px\s+at/i,
+    'circle var(--zone-feed-glow-radius) at'
+  );
+}
+
 export default function FeedCard({
   cardId, 
   currentUserId,
@@ -101,7 +108,35 @@ export default function FeedCard({
   };
 
   return (
-    <div style={{ background: bgGradient }} className={`relative rounded-md ${textColor} w-full break-inside-avoid mb-6 border border-[#D0D7DE] ${showQuickBar ? 'z-40' : 'z-0'}`}>
+    <>
+      <style>{`
+        @property --zone-feed-glow-radius {
+          syntax: '<length>';
+          inherits: false;
+          initial-value: 340px;
+        }
+
+        .zone-feed-card {
+          --zone-feed-glow-radius: 340px;
+          transition:
+            --zone-feed-glow-radius 620ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .zone-feed-card:hover {
+          --zone-feed-glow-radius: 390px;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .zone-feed-card {
+            transition: none;
+          }
+        }
+      `}</style>
+
+      <div
+        style={{ background: withAnimatedGlowRadius(bgGradient) }}
+        className={`zone-feed-card relative rounded-md ${textColor} w-full break-inside-avoid mb-6 border border-[#D0D7DE] ${showQuickBar ? 'z-40' : 'z-0'}`}
+      >
       
       {/* --- Card Header & Content --- */}
       <div className="p-6 pb-4 relative rounded-t-md overflow-hidden">
@@ -362,6 +397,7 @@ export default function FeedCard({
         </div>,
         document.body
       )}
-    </div>
+      </div>
+    </>
   );
 }

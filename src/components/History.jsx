@@ -48,7 +48,10 @@ function SessionAccordion({ sessionData, defaultOpen = false, shouldScroll = fal
   const theme = feedCardThemes.find((t) => t.id === sessionData.theme_id) ?? feedCardThemes[0];
   const fairScore = computeFairScore(timeline) ?? sessionData.focus_score;
   const coverOpacity = scoreToCoverOpacity(parseFloat(fairScore));
-  const expandedGradient = theme.gradient.replace('circle 340px', 'circle 600px');
+  const expandedGradient = theme.gradient.replace(
+    'circle 340px',
+    'circle var(--zone-history-glow-radius)'
+  );
 
   const formatElapsed = (seconds) => {
     const total = Number(seconds);
@@ -62,7 +65,7 @@ function SessionAccordion({ sessionData, defaultOpen = false, shouldScroll = fal
     <div
       ref={containerRef}
       onClick={() => setIsOpen(!isOpen)}
-      className="relative rounded-md text-slate-900 w-full break-inside-avoid border border-[#D0D7DE] overflow-hidden shadow-sm cursor-pointer transition-all hover:border-slate-400"
+      className="zone-history-card relative rounded-md text-slate-900 w-full break-inside-avoid border border-[#D0D7DE] overflow-hidden shadow-sm cursor-pointer transition-all"
       style={{ background: expandedGradient }}
     >
       <div
@@ -237,6 +240,29 @@ export function History({ session }) {
 
   return (
     <div className="mb-8">
+      <style>{`
+        @property --zone-history-glow-radius {
+          syntax: '<length>';
+          inherits: false;
+          initial-value: 600px;
+        }
+
+        .zone-history-card {
+          --zone-history-glow-radius: 600px;
+          transition:
+            --zone-history-glow-radius 620ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .zone-history-card:hover {
+          --zone-history-glow-radius: 675px;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .zone-history-card {
+            transition: none;
+          }
+        }
+      `}</style>
       <div className="mb-8">
         <h1 className="mt-2 text-3xl font-semibold text-slate-900">History</h1>
         <p className="mt-2 text-sm text-slate-500">

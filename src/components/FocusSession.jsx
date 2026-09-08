@@ -6,10 +6,23 @@ import { supabase } from '../lib/supabaseClient';
 import { feedCardThemes } from '../feedCardThemes';
 import LowDopamineBreak from './LowDopamineBreak';
 import { computeOptimalSession } from '../lib/focusAnalytics';
+import ConfirmModal from './ConfirmModal';
 
 const MINI_SIZE = { width: 280, height: 130 };
 
 const OPTIMAL_BREAKS_STORAGE_PREFIX = 'zone:optimal-breaks:';
+
+const FOCUS_CARD_THEME_IDS = [
+  'ocean',
+  'blush',
+  'amber',
+  'meadow',
+  'lavender',
+];
+
+const focusCardThemes = FOCUS_CARD_THEME_IDS
+  .map((id) => feedCardThemes.find((theme) => theme.id === id))
+  .filter(Boolean);
 
 
 function formatActivityTime(totalSeconds) {
@@ -193,7 +206,7 @@ function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, s
         <div className="mb-8">
           <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-4">Choose Card Theme</p>
           <div className="flex gap-4 flex-wrap">
-            {feedCardThemes.map((theme) => (
+            {focusCardThemes.map((theme) => (
               <button
                 key={theme.id}
                 onClick={() => setSelectedTheme(theme.id)}
@@ -306,30 +319,13 @@ function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, s
         {error && <p className="text-[#E11D48] mb-4">{error}</p>}
 
         <div className="flex justify-end gap-3 items-center flex-wrap">
-          {confirmingDiscard ? (
-            <div className="bg-slate-900/95 border border-white/20 p-2.5 rounded-md shadow-sm flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
-              <span className="text-xs text-white font-medium pl-1">Discard session?</span>
-              <button
-                onClick={onClose}
-                className="bg-rose-600 hover:bg-rose-500 text-white text-xs px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer"
-              >
-                Yes
-              </button>
-              <button
-                onClick={() => setConfirmingDiscard(false)}
-                className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer"
-              >
-                No
-              </button>
-            </div>
-          ) : (
-            <button 
-              onClick={() => setConfirmingDiscard(true)}
-              className="px-5 py-3 rounded-md font-semibold text-white bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.15)] transition-colors cursor-pointer"
-            >
-              Discard
-            </button>
-          )}
+          <button
+            onClick={() => setConfirmingDiscard(true)}
+            disabled={isSubmitting}
+            className="px-5 py-3 rounded-md font-semibold text-white bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.15)] transition-colors cursor-pointer disabled:opacity-50"
+          >
+            Discard
+          </button>
 
           {/* Save Privately Button */}
           <button 
@@ -355,6 +351,16 @@ function FocusOverview({ goal, elapsedTime, logs, distractionLogs, focusScore, s
           </button>
         </div>
       </div>
+
+      {confirmingDiscard && (
+        <ConfirmModal
+          title="Discard session?"
+          description="This completed session will be closed without being saved."
+          confirmLabel="Discard session"
+          onConfirm={onClose}
+          onCancel={() => setConfirmingDiscard(false)}
+        />
+      )}
     </div>
   );
 }
@@ -421,10 +427,47 @@ export default function FocusSession({ onStopFocus }) {
   // ticks, or it silently falls behind.
   const sessionStartRef = useRef(null);
 
+  // Groups live-presence state. The presence row is created only when the
+  // user actually starts tracking a task, not when they merely open the
+  // Focus Session screen.
+  const livePresenceIdRef = useRef(null);
+  const liveHeartbeatRef = useRef(null);
+  const liveScoreRef = useRef(null);
+  const lastLiveScoreSyncRef = useRef(0);
+
   useEffect(() => {
     return () => {
       childRef.current?.kill().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
+
+      if (liveHeartbeatRef.current) {
+        clearInterval(liveHeartbeatRef.current);
+        liveHeartbeatRef.current = null;
+      }
+
+      // Best-effort cleanup for normal React unmounts. If the app crashes or
+      // the computer disappears, the Groups page still protects itself with
+      // the heartbeat timeout.
+      const presenceId = livePresenceIdRef.current;
+      livePresenceIdRef.current = null;
+
+      if (presenceId) {
+        supabase
+          .rpc('zone_end_live_focus', {
+            p_session_id: presenceId,
+            p_focus_score:
+              liveScoreRef.current == null
+                ? null
+                : Number.isFinite(Number(liveScoreRef.current))
+                  ? Number(liveScoreRef.current)
+                  : null,
+          })
+          .then(({ error: presenceError }) => {
+            if (presenceError) {
+              console.warn('Failed to clean up live group presence:', presenceError);
+            }
+          });
+      }
     };
   }, []);
 
@@ -521,10 +564,104 @@ export default function FocusSession({ onStopFocus }) {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const stopLiveHeartbeat = () => {
+    if (liveHeartbeatRef.current) {
+      clearInterval(liveHeartbeatRef.current);
+      liveHeartbeatRef.current = null;
+    }
+  };
+
+  const updateLivePresence = async (presenceId, score = null) => {
+    if (!presenceId) return;
+
+    const numericScore = score == null ? null : Number(score);
+    const { error: presenceError } = await supabase.rpc('zone_update_live_focus', {
+      p_session_id: presenceId,
+      p_focus_score: Number.isFinite(numericScore) ? numericScore : null,
+    });
+
+    if (presenceError) throw presenceError;
+  };
+
+  const beginLivePresence = async (taskName) => {
+    stopLiveHeartbeat();
+
+    const { data, error: presenceError } = await supabase.rpc('zone_start_live_focus', {
+      p_task_name: taskName,
+    });
+
+    if (presenceError) throw presenceError;
+
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row?.id) {
+      throw new Error('Live focus session did not return an id.');
+    }
+
+    livePresenceIdRef.current = row.id;
+
+    // Heartbeats make crashed/sleeping clients go stale instead of leaving a
+    // member looking live forever. The Groups page can treat a heartbeat older
+    // than its stale threshold as inactive.
+    liveHeartbeatRef.current = setInterval(() => {
+      const presenceId = livePresenceIdRef.current;
+      if (!presenceId) return;
+
+      updateLivePresence(presenceId, liveScoreRef.current).catch((presenceErr) => {
+        console.warn('Live focus heartbeat failed:', presenceErr);
+      });
+    }, 15000);
+  };
+
+  const publishLiveScore = (score) => {
+    const numericScore = Number(score);
+    if (!Number.isFinite(numericScore)) return;
+
+    liveScoreRef.current = numericScore;
+
+    const presenceId = livePresenceIdRef.current;
+    if (!presenceId) return;
+
+    const now = Date.now();
+
+    // The sidecar can emit score information frequently. Keep the UI live
+    // without turning every classifier message into a database write.
+    if (now - lastLiveScoreSyncRef.current < 5000) return;
+
+    lastLiveScoreSyncRef.current = now;
+
+    updateLivePresence(presenceId, numericScore).catch((presenceErr) => {
+      console.warn('Failed to sync live focus score:', presenceErr);
+    });
+  };
+
+  const finishLivePresence = async () => {
+    const presenceId = livePresenceIdRef.current;
+
+    stopLiveHeartbeat();
+    livePresenceIdRef.current = null;
+
+    if (!presenceId) return;
+
+    const numericScore = liveScoreRef.current == null ? null : Number(liveScoreRef.current);
+
+    const { error: presenceError } = await supabase.rpc('zone_end_live_focus', {
+      p_session_id: presenceId,
+      p_focus_score: Number.isFinite(numericScore) ? numericScore : null,
+    });
+
+    if (presenceError) throw presenceError;
+  };
+
   const handleSubmitGoal = async (e) => {
     e.preventDefault();
     const trimmedGoal = goal.trim();
     if (!trimmedGoal) return;
+
+    // Reset live-presence telemetry before this new tracking run starts.
+    stopLiveHeartbeat();
+    livePresenceIdRef.current = null;
+    liveScoreRef.current = null;
+    lastLiveScoreSyncRef.current = 0;
 
     try {
       const command = Command.sidecar('bin/backend');
@@ -558,9 +695,14 @@ export default function FocusSession({ onStopFocus }) {
             
             setScoreTimeline((prev) => [...prev, point]);
             
-            // Keep the live score updated
+            // Keep the live score updated locally and publish it to any
+            // Groups that currently contain this user.
             if (point.score !== undefined) {
-              setFocusScore(point.score);
+              const nextScore = Number(point.score);
+              if (Number.isFinite(nextScore)) {
+                setFocusScore(nextScore);
+                publishLiveScore(nextScore);
+              }
             }
           } catch (err) {
             console.error("Failed to parse telemetry:", err);
@@ -569,13 +711,17 @@ export default function FocusSession({ onStopFocus }) {
 
         if (line.includes('CURRENT_SCORE:')) {
           const score = parseInt(line.split(':')[1].trim(), 10);
-          if (!isNaN(score)) setFocusScore(score);
+          if (!isNaN(score)) {
+            setFocusScore(score);
+            publishLiveScore(score);
+          }
         }
 
         if (line.includes('FINAL_SCORE:')) {
           const score = parseInt(line.split(':')[1].trim(), 10);
           if (!isNaN(score)) {
             setFocusScore(score);
+            liveScoreRef.current = score;
             finalScoreResolverRef.current?.(score);
             finalScoreResolverRef.current = null;
           }
@@ -586,6 +732,14 @@ export default function FocusSession({ onStopFocus }) {
       childRef.current = child;
 
       await child.write(`${trimmedGoal}\n`);
+
+      // A Groups card becomes live only after the actual tracker has started.
+      // Presence failure must never prevent the user from focusing.
+      try {
+        await beginLivePresence(trimmedGoal);
+      } catch (presenceError) {
+        console.warn('Could not start live group presence:', presenceError);
+      }
 
       setSubmitted(true);
       setElapsedTime(0);
@@ -662,6 +816,14 @@ export default function FocusSession({ onStopFocus }) {
   };
 
   const handleStop = async () => {
+    // Make the user's Group card go inactive as soon as they click End Focus
+    // Session instead of waiting up to 15 seconds for FINAL_SCORE.
+    try {
+      await finishLivePresence();
+    } catch (presenceError) {
+      console.warn('Could not end live group presence:', presenceError);
+    }
+
     try {
       const finalScorePromise = new Promise((resolve) => {
         finalScoreResolverRef.current = resolve;
@@ -798,32 +960,20 @@ export default function FocusSession({ onStopFocus }) {
             <ZoneLogo animated={false} size={20} />
           </div>
           <div className="flex items-center">
-            {confirmingClose ? (
-              <div className="bg-slate-900/95 border border-white/20 p-2.5 rounded-md shadow-sm flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
-                <span className="text-xs text-white font-medium pl-1">End session?</span>
-                <button
-                  onClick={handleClose}
-                  className="bg-rose-600 hover:bg-rose-500 text-white text-xs px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer"
-                >
-                  Yes
-                </button>
-                <button
-                  onClick={() => setConfirmingClose(false)}
-                  className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer"
-                >
-                  No
-                </button>
-              </div>
-            ) : (
+            {!submitted ? (
               <button
                 onClick={() => setConfirmingClose(true)}
-                className="text-[rgba(255,255,255,0.75)] hover:text-white hover:bg-white/10 rounded-md p-[10px] -mr-[10px] transition-colors cursor-pointer flex items-center justify-center"
+                className="text-[rgba(255,255,255,0.75)] hover:text-white hover:bg-white/10 rounded-full p-[10px] -mr-[10px] transition-colors cursor-pointer flex items-center justify-center"
+                aria-label="Close focus session"
+                title="Close"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
               </button>
+            ) : (
+              <div className="w-[20px]" aria-hidden="true" />
             )}
           </div>
         </div>
@@ -932,7 +1082,7 @@ export default function FocusSession({ onStopFocus }) {
                 disabled={!goal.trim()}
                 className="w-full h-[48px] px-[32px] bg-[#E11D48] hover:bg-rose-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all text-white text-[16px] font-semibold rounded-md shadow-lg shadow-rose-900/20 active:scale-[0.98] flex items-center justify-center"
               >
-                Start Tracking
+                Start Focus Session
               </button>
             </form>
           </div>
@@ -1020,6 +1170,16 @@ export default function FocusSession({ onStopFocus }) {
           durationSeconds={5 * 60}
           onComplete={handleFinishOptimalBreak}
           onSkip={handleFinishOptimalBreak}
+        />
+      )}
+
+      {confirmingClose && (
+        <ConfirmModal
+          title="End focus session?"
+          description="Your current focus session will stop and you’ll move to the session review."
+          confirmLabel="End session"
+          onConfirm={handleClose}
+          onCancel={() => setConfirmingClose(false)}
         />
       )}
     </div>

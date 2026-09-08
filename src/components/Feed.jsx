@@ -4,6 +4,7 @@ import FeedCard from '../FeedCard';
 import { feedCardThemes } from '../feedCardThemes';
 import { supabase } from '../lib/supabaseClient';
 import { computeFairScore } from '../lib/focusAnalytics';
+import ConfirmModal from './ConfirmModal';
 
 
 function getInitials(name) {
@@ -37,52 +38,28 @@ function initialsAvatarDataUrl(name) {
 }
 
 
-function zoneDownloadFileName() {
-  const now = new Date();
-  const pad = (value) => String(value).padStart(2, '0');
 
-  return `zone${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
-}
 
-async function exportFeedCardPng(card) {
-  const { toPng } = await import('html-to-image');
-  const node = Array.from(document.querySelectorAll('[data-share-card-id]')).find(
-    (element) => element.dataset.shareCardId === String(card.rawId)
-  );
+const EDIT_CARD_THEME_IDS = [
+  'ocean',
+  'blush',
+  'amber',
+  'meadow',
+  'lavender',
+];
 
-  if (!node) {
-    throw new Error('Could not find the feed card to export.');
-  }
-
-  // Export the actual rendered FeedCard at 2x resolution so text and UI stay
-  // crisp when posted to social media.
-  const dataUrl = await toPng(node, {
-    cacheBust: true,
-    pixelRatio: 2,
-  });
-
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-  const fileName = zoneDownloadFileName();
-
-  // Download the PNG directly to the system's normal download location.
-  const objectUrl = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = objectUrl;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(objectUrl);
-}
+const editCardThemes = EDIT_CARD_THEME_IDS
+  .map((id) => feedCardThemes.find((theme) => theme.id === id))
+  .filter(Boolean);
 
 function EditPostModal({ post, userId, onClose, onSaved }) {
   const [title, setTitle] = useState(post.title || '');
-  const [selectedTheme, setSelectedTheme] = useState(post.themeId || feedCardThemes[0].id);
+  const [selectedTheme, setSelectedTheme] = useState(
+    post.themeId || editCardThemes[0]?.id || feedCardThemes[0].id
+  );
   const [imageFile, setImageFile] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
-  const [confirmingClose, setConfirmingClose] = useState(false);
 
   const handleSave = async () => {
     if (!title.trim()) {
@@ -107,13 +84,13 @@ function EditPostModal({ post, userId, onClose, onSaved }) {
 
         if (uploadError) throw uploadError;
 
-        const { data } = supabase.storage.from('feed_images').getPublicUrl(filePath);
+        const { data } = supabase.storage
+          .from('feed_images')
+          .getPublicUrl(filePath);
+
         bgImageUrl = data.publicUrl;
       }
 
-      // Persist the edit and require Supabase to return the row that was
-      // actually updated. With RLS, an UPDATE can affect zero rows without
-      // looking like a frontend failure unless we explicitly verify it.
       const { data: updatedPost, error: updateError } = await supabase
         .from('feed_posts')
         .update({
@@ -134,7 +111,6 @@ function EditPostModal({ post, userId, onClose, onSaved }) {
         );
       }
 
-      // Update the UI only from the values Supabase confirms were persisted.
       onSaved(updatedPost.id, {
         title: updatedPost.title,
         themeId: updatedPost.theme_id,
@@ -153,95 +129,132 @@ function EditPostModal({ post, userId, onClose, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-[#0F172A] text-white flex flex-col z-50 overflow-y-auto p-10">
-      <div className="max-w-3xl mx-auto w-full bg-[#1E293B] rounded-md p-8 shadow-2xl border border-[rgba(255,255,255,0.1)]">
-        <h2 className="text-3xl font-bold mb-6">Edit Post</h2>
-
-        <div className="mb-8">
-          <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-2">Title</p>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="w-full h-[48px] px-[16px] rounded-md bg-[#0F172A] border-[1.5px] border-[rgba(255,255,255,0.12)] text-white text-[15px] focus:outline-none focus:border-[rgba(99,102,241,0.6)] transition-colors"
-          />
-        </div>
-
-        <div className="mb-8">
-          <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-4">Choose Card Theme</p>
-          <div className="flex gap-4 flex-wrap">
-            {feedCardThemes.map((theme) => (
-              <button
-                key={theme.id}
-                onClick={() => setSelectedTheme(theme.id)}
-                className={`w-12 h-12 rounded-full border-2 transition-transform cursor-pointer active:scale-95 ${selectedTheme === theme.id ? 'border-white scale-110 outline outline-2 outline-offset-2 outline-indigo-400' : 'border-transparent hover:scale-105'}`}
-                style={{ background: theme.gradient }}
-                title={theme.name}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="mb-10">
-          <p className="text-xs uppercase tracking-[0.1em] text-[rgba(255,255,255,0.6)] mb-4">
-            {post.bgImage ? 'Replace Photo' : 'Add a Photo (Optional)'}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/25 p-4"
+      onMouseDown={() => {
+        if (!isSaving) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="zone-edit-post-title"
+        className="my-auto w-full max-w-2xl overflow-hidden rounded-md border border-[#D0D7DE] bg-white text-slate-900 shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-slate-200 px-6 py-5">
+          <h2
+            id="zone-edit-post-title"
+            className="text-xl font-semibold text-slate-900"
+          >
+            Edit card
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Update the title, colour, or photo for this focus card.
           </p>
-          {post.bgImage && !imageFile && (
-            <img
-              src={post.bgImage}
-              alt="Current"
-              className="w-full max-h-48 object-cover rounded-md mb-4 border border-[rgba(255,255,255,0.08)]"
-            />
-          )}
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e) => setImageFile(e.target.files[0])}
-            className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-500/20 file:text-indigo-300 hover:file:bg-indigo-500/30 file:cursor-pointer cursor-pointer"
-          />
         </div>
 
-        {error && <p className="text-[#E11D48] mb-4 text-sm">{error}</p>}
+        <div className="space-y-6 px-6 py-5">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700">
+              Title
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              className="mt-2 h-11 w-full rounded-md border border-[#D0D7DE] bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+            />
+          </div>
 
-        <div className="flex justify-end gap-4 items-center">
-          {confirmingClose ? (
-            <div className="bg-slate-900/95 border border-white/20 p-2.5 rounded-md flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
-              <span className="text-xs text-white font-medium pl-1">Discard changes?</span>
-              <button
-                onClick={onClose}
-                className="bg-rose-600 hover:bg-rose-500 text-white text-xs px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer"
-              >
-                Yes
-              </button>
-              <button
-                onClick={() => setConfirmingClose(false)}
-                className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer"
-              >
-                No
-              </button>
+          <div>
+            <p className="text-xs font-semibold text-slate-700">
+              Card colour
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              {editCardThemes.map((theme) => {
+                const selected = selectedTheme === theme.id;
+
+                return (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    onClick={() => setSelectedTheme(theme.id)}
+                    className={`h-10 w-10 rounded-full border transition-all duration-200 cursor-pointer ${
+                      selected
+                        ? 'border-slate-900 ring-2 ring-slate-900/15 ring-offset-2'
+                        : 'border-[#D0D7DE] hover:scale-105'
+                    }`}
+                    style={{ background: theme.gradient }}
+                    title={theme.name}
+                    aria-label={`${theme.name} card colour`}
+                    aria-pressed={selected}
+                  />
+                );
+              })}
             </div>
-          ) : (
-            <button
-              onClick={() => setConfirmingClose(true)}
-              disabled={isSaving}
-              className="px-6 py-3 rounded-md font-semibold text-white bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.15)] active:scale-95 transition-all cursor-pointer disabled:opacity-50"
-            >
-              Cancel
-            </button>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-slate-700">
+              {post.bgImage ? 'Replace photo' : 'Add a photo'}
+              <span className="ml-1 font-normal text-slate-400">
+                optional
+              </span>
+            </p>
+
+            {post.bgImage && !imageFile && (
+              <img
+                src={post.bgImage}
+                alt="Current card"
+                className="mt-3 max-h-44 w-full rounded-md border border-[#D0D7DE] object-cover"
+              />
+            )}
+
+            {imageFile && (
+              <p className="mt-3 truncate text-xs text-slate-500">
+                Selected: {imageFile.name}
+              </p>
+            )}
+
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+              className="mt-3 block w-full text-sm text-slate-500 file:mr-3 file:h-9 file:rounded-md file:border file:border-[#D0D7DE] file:bg-white file:px-3 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-50 file:cursor-pointer cursor-pointer"
+            />
+          </div>
+
+          {error && (
+            <p className="text-sm text-rose-600">
+              {error}
+            </p>
           )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-200 px-6 py-5">
           <button
+            type="button"
+            onClick={onClose}
+            disabled={isSaving}
+            className="h-10 rounded-md border border-[#D0D7DE] bg-white px-4 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
             onClick={handleSave}
             disabled={isSaving}
-            className="px-6 py-3 rounded-md font-semibold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 active:scale-95 transition-all cursor-pointer shadow-lg shadow-indigo-900/20"
+            className="h-10 rounded-md bg-slate-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
           >
-            {isSaving ? 'Saving...' : 'Save Changes'}
+            {isSaving ? 'Saving...' : 'Save changes'}
           </button>
         </div>
       </div>
     </div>
   );
 }
-
 export default function Feed() {
   const navigate = useNavigate();
   const [livePosts, setLivePosts] = useState([]);
@@ -249,8 +262,8 @@ export default function Feed() {
   const [currentUserId, setCurrentUserId] = useState(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [editingPost, setEditingPost] = useState(null);
-  const [downloadingPostId, setDownloadingPostId] = useState(null);
 
   // --- Notification States ---
   const [notifications, setNotifications] = useState([]);
@@ -486,7 +499,10 @@ export default function Feed() {
           userId: post.user_id,
           userName: usernameMap[post.user_id] || (isOwnPost ? 'You' : 'Fellow User'),
           userAvatar:
-            avatarMap[post.user_id] || `https://api.dicebear.com/7.x/avataaars/svg?seed=${post.user_id}`,
+            avatarMap[post.user_id] ||
+            initialsAvatarDataUrl(
+              usernameMap[post.user_id] || (isOwnPost ? 'You' : 'Fellow User')
+            ),
           date: formattedDate,
           title: post.title,
           goal: post.task_name || post.title,
@@ -508,6 +524,8 @@ export default function Feed() {
 
   const handleDeletePost = async (rawId) => {
     setIsDeleting(true);
+    setDeleteError('');
+
     try {
       const { error } = await supabase.from('feed_posts').delete().eq('id', rawId);
 
@@ -517,7 +535,7 @@ export default function Feed() {
       setConfirmingDeleteId(null);
     } catch (err) {
       console.error('Failed to delete post:', err);
-      alert('Could not delete the post. Please try again.');
+      setDeleteError('Could not delete this card. Please try again.');
     } finally {
       setIsDeleting(false);
     }
@@ -528,20 +546,6 @@ export default function Feed() {
       prev.map((p) => (p.rawId === rawId ? { ...p, ...updates } : p))
     );
     setEditingPost(null);
-  };
-
-  const handleDownloadPost = async (card) => {
-    if (!card?.rawId || downloadingPostId) return;
-
-    setDownloadingPostId(card.rawId);
-    try {
-      await exportFeedCardPng(card);
-    } catch (err) {
-      console.error('Failed to export feed card:', err);
-      alert('Could not create the download image. Please try again.');
-    } finally {
-      setDownloadingPostId(null);
-    }
   };
 
   const handleOpenSummary = (rawId) => {
@@ -671,7 +675,7 @@ export default function Feed() {
 
           return (
             <div key={card.id} className="relative group break-inside-avoid mb-6">
-              <div data-share-card-id={String(card.rawId)}>
+              <div>
                 <FeedCard
                   {...card}
                   cardId={card.rawId}
@@ -686,67 +690,30 @@ export default function Feed() {
               {/* Edit + Delete Buttons */}
               {isOwner && (
                 <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
-                  {confirmingDeleteId === card.rawId ? (
-                    <div className="bg-slate-900/95 border border-white/20 p-2.5 rounded-md flex items-center gap-2 backdrop-blur-md animate-in fade-in zoom-in duration-150">
-                      <span className="text-xs text-white font-medium pl-1">Delete card?</span>
-                      <button
-                        onClick={() => handleDeletePost(card.rawId)}
-                        disabled={isDeleting}
-                        className="bg-rose-600 hover:bg-rose-500 text-white text-xs px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer disabled:opacity-50"
-                      >
-                        {isDeleting ? '...' : 'Yes'}
-                      </button>
-                      <button
-                        onClick={() => setConfirmingDeleteId(null)}
-                        disabled={isDeleting}
-                        className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer"
-                      >
-                        No
-                      </button>
-                    </div>
-                  ) : (
-                    <>
+                  <>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleOpenSummary(card.rawId);
                         }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-emerald-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-white/60 bg-white/65 text-slate-700 opacity-0 backdrop-blur-sm transition-all duration-200 group-hover:opacity-100 hover:bg-white/85 hover:text-slate-900 cursor-pointer"
                         title="Open session summary"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M3 3v18h18" />
                           <path d="m7 16 4-4 3 3 5-7" />
                         </svg>
                       </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDownloadPost(card);
-                        }}
-                        disabled={downloadingPostId === card.rawId}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-sky-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer disabled:opacity-50"
-                        title="Download feed card as PNG"
-                      >
-                        {downloadingPostId === card.rawId ? (
-                          <span className="block w-[10px] h-[10px] rounded-full border border-white/40 border-t-white animate-spin" />
-                        ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M12 3v12" />
-                            <path d="m7 10 5 5 5-5" />
-                            <path d="M5 21h14" />
-                          </svg>
-                        )}
-                      </button>
+                      
                       <button
                         onClick={() => setEditingPost(card)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-indigo-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-white/60 bg-white/65 text-slate-700 opacity-0 backdrop-blur-sm transition-all duration-200 group-hover:opacity-100 hover:bg-white/85 hover:text-slate-900 cursor-pointer"
                         title="Edit your feed card"
                       >
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
-                          width="10"
-                          height="10"
+                          width="15"
+                          height="15"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
@@ -759,14 +726,17 @@ export default function Feed() {
                         </svg>
                       </button>
                       <button
-                        onClick={() => setConfirmingDeleteId(card.rawId)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 hover:bg-rose-600 text-white p-2 rounded-full shadow-lg backdrop-blur-sm cursor-pointer"
+                        onClick={() => {
+                          setDeleteError('');
+                          setConfirmingDeleteId(card.rawId);
+                        }}
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-white/60 bg-white/65 text-slate-700 opacity-0 backdrop-blur-sm transition-all duration-200 group-hover:opacity-100 hover:bg-white/85 hover:text-slate-900 cursor-pointer"
                         title="Delete your feed card"
                       >
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
-                          width="10"
-                          height="10"
+                          width="15"
+                          height="15"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
@@ -779,7 +749,6 @@ export default function Feed() {
                         </svg>
                       </button>
                     </>
-                  )}
                 </div>
               )}
             </div>
@@ -793,6 +762,22 @@ export default function Feed() {
           userId={currentUserId}
           onClose={() => setEditingPost(null)}
           onSaved={handlePostUpdated}
+        />
+      )}
+
+      {confirmingDeleteId && (
+        <ConfirmModal
+          title="Delete card?"
+          description="This card will be permanently removed."
+          confirmLabel="Delete card"
+          busyLabel="Deleting..."
+          busy={isDeleting}
+          error={deleteError}
+          onConfirm={() => handleDeletePost(confirmingDeleteId)}
+          onCancel={() => {
+            setConfirmingDeleteId(null);
+            setDeleteError('');
+          }}
         />
       )}
     </div>
